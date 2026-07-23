@@ -2,11 +2,18 @@
 set -eu
 
 readonly INSTALLER="/usr/local/libexec/canon-g3010-macos-compat/install.sh"
+readonly PPD_PATH="/Library/Printers/PPDs/Contents/Resources/CanonIJG3000series.ppd.gz"
 
 if [[ ! -x "${INSTALLER}" ]]; then
   print -u2 -- "Compatibility installer is missing: ${INSTALLER}"
   exit 1
 fi
 
-"${INSTALLER}"
+if [[ -f "${PPD_PATH}" ]]; then
+  "${INSTALLER}"
+else
+  print -- "Printing setup skipped because the Canon G3000 CUPS driver is missing."
+fi
+
+print -- "Network scanner command installed: /usr/local/bin/canon-g3010-scan"
 exit 0

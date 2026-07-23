@@ -1,4 +1,4 @@
-# How the compatibility layer works
+# How the printing and scanning compatibility layer works
 
 [简体中文](HOW_IT_WORKS.zh-CN.md)
 
@@ -49,7 +49,7 @@ idle with no alert.
 This is a tested compatibility relationship, not a compatibility guarantee
 from Canon.
 
-## 4. Data flow
+## 4. Printing data flow
 
 ```text
 Document or image
@@ -70,7 +70,58 @@ Canon G3010 firmware and print engine
 The open-source code in this repository configures and validates this path.
 It does not copy, patch, reverse engineer, or redistribute Canon binaries.
 
-## 5. Discovery
+## 5. Scanner protocol
+
+The G3010 exposes a WSD device whose metadata includes
+`wscn:ScanDeviceType`. Its scanner endpoint is the local HTTP service:
+
+```text
+http://PRINTER_IP:80/wsd/scanservice.cgi
+```
+
+WSD Scan uses SOAP messages over HTTP. The backend first asks the device for
+its scanner elements and configuration, creates a scan job using the selected
+resolution, color mode, and rectangle, then retrieves the image stream.
+
+The project uses the open-source `sane-airscan` backend to translate between
+this WSD Scan protocol and the standard SANE API. `scanimage` exposes the
+result as JPEG, PNG, or TIFF. No Canon scanner binary, private password, USB
+connection, or cloud service participates in this path.
+
+## 6. Scanning data flow
+
+```text
+macOS scan wrapper
+    │
+    ▼
+Docker Desktop local Linux container
+    │
+    ▼
+SANE scanimage
+    │
+    ▼
+sane-airscan WSD backend
+    │  SOAP/HTTP over the local network
+    ▼
+G3010 /wsd/scanservice.cgi
+    │
+    ▼
+JPEG/PNG/TIFF file on the Mac
+```
+
+The container provides a reproducible runtime without modifying macOS system
+frameworks or installing an unsigned ICA bundle. The wrapper mounts only a
+temporary scanner configuration and the selected output directory. It does
+not expose the rest of the Mac filesystem to the scanner runtime.
+
+The physical device reported and successfully used these capabilities:
+
+- flatbed source;
+- 150, 300, and 600 dpi;
+- color and grayscale;
+- maximum scan area 215.9 × 296.672 mm.
+
+## 7. Discovery
 
 When no hostname is supplied, the installer resolves:
 
@@ -81,7 +132,12 @@ Canon G3010 series._printer._tcp.local.
 using DNS-SD and extracts the target hostname from the service record. A
 hostname can also be passed explicitly with `--host`.
 
-## 6. Defaults
+For scanning, the wrapper first tries the installed CUPS queue, then the same
+DNS-SD service. `--ip` bypasses discovery. A temporary `sane-airscan`
+configuration points directly to the device's WSD scanner endpoint, which
+avoids relying on multicast discovery through Docker Desktop's network layer.
+
+## 8. Defaults
 
 The installer selects conservative settings shared by G3000 and G3010:
 
@@ -95,18 +151,21 @@ The installer selects conservative settings shared by G3000 and G3010:
 Photo, grayscale, borderless, and quality settings remain available in the
 macOS print dialog.
 
-## 7. Security and privacy
+The scanner defaults to A4, 300 dpi, color, and JPEG.
+
+## 9. Security and privacy
 
 - Discovery stays on the local network.
 - No document data is sent to this project or to a cloud service.
-- Print jobs are transmitted directly from the Mac to the printer.
+- Print jobs and scans are transmitted directly between the Mac and printer.
+- The printer's web administrator password is not used or stored.
+- The scan container can write only to the chosen output directory.
 - The scripts do not collect telemetry.
 - The project does not disable Gatekeeper or System Integrity Protection.
 
-## 8. Future work
+## 10. Compatibility boundary
 
 - Native open-source BJRaster3 renderer independent of Canon's G3000 package;
-- USB transport;
-- ICA or SANE-compatible scanning;
+- optional native macOS ICA front end over the existing WSD implementation;
 - Developer ID signing and notarization;
 - automated testing on more macOS releases and firmware versions.

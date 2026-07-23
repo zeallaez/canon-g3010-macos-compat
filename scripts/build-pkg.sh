@@ -22,7 +22,8 @@ trap cleanup EXIT INT TERM
 /bin/rm -f "${package_path}" "${archive_path}" "${checksum_path}"
 
 /bin/mkdir -p \
-  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat"
+  "${payload_root}/usr/local/bin" \
+  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner"
 
 /bin/cp -X \
   "${repo_root}/src/install.sh" \
@@ -32,9 +33,18 @@ trap cleanup EXIT INT TERM
   "${repo_root}/src/uninstall.sh" \
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/uninstall.sh"
 
+/bin/cp -X \
+  "${repo_root}/scanner/scan.sh" \
+  "${payload_root}/usr/local/bin/canon-g3010-scan"
+
+/bin/cp -X \
+  "${repo_root}/scanner/Dockerfile" \
+  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner/Dockerfile"
+
 /bin/chmod 0755 \
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/install.sh" \
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/uninstall.sh" \
+  "${payload_root}/usr/local/bin/canon-g3010-scan" \
   "${repo_root}/package/scripts/preinstall" \
   "${repo_root}/package/scripts/postinstall"
 

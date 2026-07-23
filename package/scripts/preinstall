@@ -9,10 +9,8 @@ if [[ "$(/usr/bin/uname -s)" != "Darwin" ]]; then
 fi
 
 if [[ ! -f "${PPD_PATH}" ]]; then
-  print -u2 -- "Required Canon G3000 CUPS driver is not installed."
-  print -u2 -- "Download it from:"
-  print -u2 -- "https://asia.canon/en/support/0101155813?model=PIXMA%20G3000"
-  exit 1
+  print -- "Canon G3000 CUPS driver is not installed."
+  print -- "Network scanning can still be installed; printing will be skipped."
 fi
 
 exit 0

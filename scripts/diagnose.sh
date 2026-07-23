@@ -43,6 +43,25 @@ section "Visible printer services"
   /usr/bin/grep -Ei 'G3010|canonijnetwork|network (ipp|lpd|dnssd)' ||
   print -- "No matching service was reported by lpinfo."
 
+section "WSD/SANE scanner runtime"
+if command -v docker >/dev/null 2>&1; then
+  print -- "Docker command: $(command -v docker)"
+  if docker info >/dev/null 2>&1; then
+    print -- "Docker Desktop: running"
+    if docker image inspect \
+      "canon-g3010-macos-compat-scanner:1.1.0" >/dev/null 2>&1; then
+      print -- "Scanner image: installed"
+    else
+      print -- "Scanner image: not built yet"
+    fi
+  else
+    print -- "Docker Desktop: not running or not accessible"
+  fi
+else
+  print -- "Docker Desktop: not installed"
+fi
+print -- "Scanner test: ./scanner/scan.sh --ip ADDRESS --list"
+
 section "Notes"
 print -- "This report is read-only."
 print -- "Redact hostnames or serial-like identifiers before posting publicly."
