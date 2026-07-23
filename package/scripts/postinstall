@@ -1,0 +1,12 @@
+#!/bin/zsh
+set -eu
+
+readonly INSTALLER="/usr/local/libexec/canon-g3010-macos-compat/install.sh"
+
+if [[ ! -x "${INSTALLER}" ]]; then
+  print -u2 -- "Compatibility installer is missing: ${INSTALLER}"
+  exit 1
+fi
+
+"${INSTALLER}"
+exit 0

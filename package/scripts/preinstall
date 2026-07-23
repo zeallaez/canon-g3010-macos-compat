@@ -1,0 +1,18 @@
+#!/bin/zsh
+set -eu
+
+readonly PPD_PATH="/Library/Printers/PPDs/Contents/Resources/CanonIJG3000series.ppd.gz"
+
+if [[ "$(/usr/bin/uname -s)" != "Darwin" ]]; then
+  print -u2 -- "Canon G3010 compatibility layer supports macOS only."
+  exit 1
+fi
+
+if [[ ! -f "${PPD_PATH}" ]]; then
+  print -u2 -- "Required Canon G3000 CUPS driver is not installed."
+  print -u2 -- "Download it from:"
+  print -u2 -- "https://asia.canon/en/support/0101155813?model=PIXMA%20G3000"
+  exit 1
+fi
+
+exit 0

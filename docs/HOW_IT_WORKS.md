@@ -1,0 +1,112 @@
+# How the compatibility layer works
+
+[简体中文](HOW_IT_WORKS.zh-CN.md)
+
+## 1. What the printer exposes
+
+The tested G3010 firmware (`3.001`) advertises:
+
+- IPP 1.1 and 2.0 on `/ipp/print`;
+- PWG Raster at 600 dpi in sRGB and grayscale;
+- LPD on TCP port 515 with remote queue `auto`;
+- IEEE-1284 commands including `BJRaster3`, `NCCe`, and `IVEC`;
+- color, single-sided A4/Legal media, photo media, envelopes, and borderless
+  sizes.
+
+The printer does not advertise PostScript or PCL. Generic PostScript and PCL
+PPDs therefore cannot drive it.
+
+## 2. Why the driverless IPP path was not selected
+
+A driverless `IPP Everywhere` queue was created successfully and macOS
+discovered the expected media and color capabilities. During the print test,
+however, the printer reported:
+
+```text
+printer-state-reasons = spool-area-full-report
+printer-alert-description = Non-critical alert - spool area full
+job-media-progress = 0
+```
+
+The job remained in `processing` at 0%. This indicates that the advertised PWG
+Raster path exists but is not robust with the 600 dpi raster stream generated
+by the tested macOS version.
+
+## 3. Why the G3000 renderer is usable
+
+Canon's G3000 macOS package contains:
+
+- `CanonIJG3000series.ppd.gz`;
+- `Raster2CanonIJS`, a universal arm64/x86_64 CUPS raster filter;
+- the G3000 model database and color profile;
+- native network and printer utility components.
+
+The G3010 reports `BJRaster3` support. The G3000 filter emits Canon's compact
+native raster stream for a closely related print engine. Sending this stream
+to the G3010's raw LPD queue completed the test job and returned the device to
+idle with no alert.
+
+This is a tested compatibility relationship, not a compatibility guarantee
+from Canon.
+
+## 4. Data flow
+
+```text
+Document or image
+    │
+    ▼
+macOS print framework / CUPS
+    │  application/vnd.cups-raster
+    ▼
+Canon Raster2CanonIJS
+    │  BJRaster3-compatible native stream
+    ▼
+macOS LPD backend
+    │  TCP 515, remote queue "auto"
+    ▼
+Canon G3010 firmware and print engine
+```
+
+The open-source code in this repository configures and validates this path.
+It does not copy, patch, reverse engineer, or redistribute Canon binaries.
+
+## 5. Discovery
+
+When no hostname is supplied, the installer resolves:
+
+```text
+Canon G3010 series._printer._tcp.local.
+```
+
+using DNS-SD and extracts the target hostname from the service record. A
+hostname can also be passed explicitly with `--host`.
+
+## 6. Defaults
+
+The installer selects conservative settings shared by G3000 and G3010:
+
+- A4;
+- plain paper;
+- color enabled;
+- normal quality;
+- rear/main feed;
+- one-sided printing.
+
+Photo, grayscale, borderless, and quality settings remain available in the
+macOS print dialog.
+
+## 7. Security and privacy
+
+- Discovery stays on the local network.
+- No document data is sent to this project or to a cloud service.
+- Print jobs are transmitted directly from the Mac to the printer.
+- The scripts do not collect telemetry.
+- The project does not disable Gatekeeper or System Integrity Protection.
+
+## 8. Future work
+
+- Native open-source BJRaster3 renderer independent of Canon's G3000 package;
+- USB transport;
+- ICA or SANE-compatible scanning;
+- Developer ID signing and notarization;
+- automated testing on more macOS releases and firmware versions.
