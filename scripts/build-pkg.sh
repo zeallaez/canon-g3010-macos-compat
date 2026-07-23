@@ -19,14 +19,16 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+/bin/rm -f "${package_path}" "${archive_path}" "${checksum_path}"
+
 /bin/mkdir -p \
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat"
 
-/bin/cp \
+/bin/cp -X \
   "${repo_root}/src/install.sh" \
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/install.sh"
 
-/bin/cp \
+/bin/cp -X \
   "${repo_root}/src/uninstall.sh" \
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/uninstall.sh"
 
