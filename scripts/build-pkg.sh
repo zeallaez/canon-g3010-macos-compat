@@ -38,6 +38,8 @@ trap cleanup EXIT INT TERM
   "${repo_root}/package/scripts/preinstall" \
   "${repo_root}/package/scripts/postinstall"
 
+/usr/bin/xattr -cr "${payload_root}"
+
 /usr/bin/pkgbuild \
   --root "${payload_root}" \
   --scripts "${repo_root}/package/scripts" \
