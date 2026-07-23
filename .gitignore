@@ -4,3 +4,6 @@ build/*
 dist/*
 !dist/.gitkeep
 *.log
+.tmp-sane/
+test-output/
+experiments/
