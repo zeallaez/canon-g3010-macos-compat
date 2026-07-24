@@ -4,6 +4,7 @@ set -eu
 readonly DEFAULT_QUEUE="Canon_G3010"
 readonly DEFAULT_SERVICE_NAME="Canon G3010 series"
 readonly DEFAULT_SERVICE_TYPE="_printer._tcp"
+readonly DEFAULT_SERVICE_URI="Canon%20G3010%20series._printer._tcp.local."
 readonly DEFAULT_PPD_MODEL="Library/Printers/PPDs/Contents/Resources/CanonIJG3000series.ppd.gz"
 readonly DEFAULT_PPD_PATH="/${DEFAULT_PPD_MODEL}"
 readonly TEST_PAGE="/usr/share/cups/data/testprint"
@@ -11,6 +12,9 @@ readonly CANON_DOWNLOAD_URL="https://asia.canon/en/support/0101155813?model=PIXM
 
 queue_name="${DEFAULT_QUEUE}"
 printer_host=""
+printer_uuid=""
+printer_uri=""
+explicit_host="no"
 set_default="yes"
 print_test_page="no"
 dry_run="no"
@@ -55,8 +59,8 @@ validate_safe_token() {
   fi
 }
 
-discover_host() {
-  local lookup_file lookup_pid resolved_host i
+discover_identity() {
+  local lookup_file lookup_pid i
   lookup_file="$(/usr/bin/mktemp -t canon-g3010-dnssd)"
 
   /usr/bin/dns-sd \
@@ -66,7 +70,8 @@ discover_host() {
   lookup_pid=$!
 
   for i in {1..10}; do
-    if /usr/bin/grep -q "can be reached at" "${lookup_file}"; then
+    if /usr/bin/grep -q "can be reached at" "${lookup_file}" &&
+       /usr/bin/grep -q "UUID=" "${lookup_file}"; then
       break
     fi
     /bin/sleep 1
@@ -75,15 +80,19 @@ discover_host() {
   /bin/kill "${lookup_pid}" 2>/dev/null || true
   wait "${lookup_pid}" 2>/dev/null || true
 
-  resolved_host="$(
+  printer_host="$(
     /usr/bin/sed -nE \
       's/.* can be reached at ([^: ]+):[0-9]+.*/\1/p' \
       "${lookup_file}" |
       /usr/bin/head -n 1
   )"
+  printer_uuid="$(
+    /usr/bin/sed -nE 's/.*(^|[[:space:]])UUID=([^[:space:]]+).*/\2/p' \
+      "${lookup_file}" |
+      /usr/bin/head -n 1
+  )"
 
   /bin/rm -f "${lookup_file}"
-  print -r -- "${resolved_host}"
 }
 
 while (( $# > 0 )); do
@@ -91,6 +100,7 @@ while (( $# > 0 )); do
     --host)
       (( $# >= 2 )) || fail "--host requires a value"
       printer_host="$2"
+      explicit_host="yes"
       shift 2
       ;;
     --queue)
@@ -136,7 +146,7 @@ fi
 
 if [[ -z "${printer_host}" ]]; then
   info "Discovering ${DEFAULT_SERVICE_NAME} with DNS-SD"
-  printer_host="$(discover_host)"
+  discover_identity
 fi
 
 [[ -n "${printer_host}" ]] ||
@@ -144,9 +154,17 @@ fi
 
 validate_safe_token "printer host" "${printer_host}"
 
+if [[ "${explicit_host}" == "no" &&
+      "${printer_uuid}" =~ '^[A-Fa-f0-9-]{32,36}$' ]]; then
+  printer_uri="dnssd://${DEFAULT_SERVICE_URI}/?uuid=${printer_uuid}"
+else
+  printer_uri="lpd://${printer_host}/auto"
+fi
+
 info "Queue: ${queue_name}"
 info "Printer: ${printer_host}"
-info "Transport: lpd://${printer_host}/auto"
+info "Multifunction UUID: ${printer_uuid:-unavailable}"
+info "Transport: ${printer_uri}"
 info "Renderer: Canon G3000 series CUPS/BJRaster3 compatibility"
 
 if [[ "${dry_run}" == "yes" ]]; then
@@ -158,7 +176,7 @@ info "Creating the compatibility print queue"
 /usr/sbin/lpadmin \
   -p "${queue_name}" \
   -E \
-  -v "lpd://${printer_host}/auto" \
+  -v "${printer_uri}" \
   -m "${DEFAULT_PPD_MODEL}" \
   -D "Canon G3010 series (Mac compatibility)" \
   -L "Local Network"

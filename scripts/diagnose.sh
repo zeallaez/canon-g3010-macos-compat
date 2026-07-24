@@ -48,11 +48,23 @@ support_runtime="${HOME}/Library/Application Support/Canon G3010 macOS Compat/sc
 system_runtime="/usr/local/libexec/canon-g3010-macos-compat/scanner-native"
 source_runtime="./build/native-runtime"
 if [[ -x "${support_runtime}/bin/scanimage" ]]; then
-  print -- "Native runtime: ${support_runtime}"
+  native_runtime="${support_runtime}"
 elif [[ -x "${system_runtime}/bin/scanimage" ]]; then
-  print -- "Native runtime: ${system_runtime}"
+  native_runtime="${system_runtime}"
 elif [[ -x "${source_runtime}/bin/scanimage" ]]; then
-  print -- "Native runtime: ${source_runtime}"
+  native_runtime="${source_runtime}"
+else
+  native_runtime=""
+fi
+if [[ -n "${native_runtime}" ]]; then
+  print -- "Native runtime: ${native_runtime}"
+  if [[ -x "${native_runtime}/bin/canon-g3010-escl-bridge" ]]; then
+    print -- "Image Capture engine: direct WSD-to-eSCL"
+  elif [[ -x "${native_runtime}/bin/airsaned" ]]; then
+    print -- "Image Capture engine: legacy AirSane migration fallback"
+  else
+    print -- "Image Capture engine: missing"
+  fi
 else
   print -- "Native runtime: not built or installed"
 fi

@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install native scanner build dependencies
-        run: brew install cmake sane-backends gnutls jpeg-turbo libpng libtiff
+        run: brew install sane-backends gnutls jpeg-turbo libpng libtiff
       - name: Build release artifacts
         run: make package
       - name: Publish GitHub release

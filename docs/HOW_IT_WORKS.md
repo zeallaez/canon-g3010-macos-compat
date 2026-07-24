@@ -85,10 +85,10 @@ resolution, color mode, and rectangle, then retrieves the image stream.
 
 The project uses the open-source `sane-airscan` backend to translate between
 this WSD Scan protocol and the standard SANE API. `scanimage` exposes the
-result to the CLI. For macOS applications, AirSane translates the same SANE
-device into the standard eSCL/AirScan protocol that Apple's built-in scanner
-client understands. No Canon scanner binary, private password, USB connection,
-or cloud service participates in this path.
+result to the CLI. For macOS applications, the project's lightweight eSCL
+service parses each job and directly invokes the same `scanimage`/WSD path.
+No Canon scanner binary, private password, USB connection, or cloud service
+participates in this path.
 
 ## 6. Scanning data flow
 
@@ -96,8 +96,8 @@ or cloud service participates in this path.
 Apple Image Capture / macOS scan panel
     │  eSCL/AirScan
     ▼
-native macOS AirSane process
-    │  SANE API
+project-native lightweight eSCL service
+    │  one direct scanimage invocation per job
     ▼
 sane-airscan WSD backend
     │  SOAP/HTTP over the local network
@@ -131,20 +131,23 @@ When no hostname is supplied, the installer resolves:
 Canon G3010 series._printer._tcp.local.
 ```
 
-using DNS-SD and extracts the target hostname from the service record. A
-hostname can also be passed explicitly with `--host`.
+using DNS-SD and extracts the stable hostname and real UUID. The print queue
+uses a UUID-bearing DNS-SD URI so printing also follows address changes. A
+hostname can still be passed explicitly with `--host`.
 
 For scanning, the wrapper first tries the installed CUPS queue, then the same
 DNS-SD service. `--ip` bypasses discovery. A generated `sane-airscan`
 configuration points directly to the device's WSD scanner endpoint, avoiding
 multicast discovery and keeping the runtime deterministic.
 
-The GUI bridge publishes `Canon G3010 Scanner._uscan._tcp.local.` from the Mac
+The GUI bridge publishes `Canon G3010 series._uscan._tcp.local.` from the Mac
 with `rs=eSCL`, using the dedicated proxy host
 `canon-g3010-bridge.local.` at `127.0.0.1:8090`. Image Capture discovers that
 Bonjour record and sends eSCL requests through the Mac's loopback interface.
-The per-user launch agent keeps both the service record and bridge alive after
-login.
+The scan service reuses the physical printer's `_printer._tcp` UUID, giving
+print and scan the same multifunction identity. The per-user launch agent keeps
+the service alive, periodically resolves the stable `*.local.` hostname, and
+restarts the bridge with updated WSD configuration after a DHCP address change.
 
 ## 8. Defaults
 

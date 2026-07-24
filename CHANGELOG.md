@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.4.0 - 2026-07-24
+
+- Added an original lightweight eSCL server that invokes the native
+  `sane-airscan`/`scanimage` WSD path directly; AirSane is no longer included
+  in new builds.
+- Reused the printer's real Bonjour UUID and product name for the `_uscan`
+  service so printing and scanning share one multifunction identity.
+- Changed the print queue to a UUID-bearing DNS-SD URI while preserving the
+  tested Canon G3000 BJRaster3 renderer.
+- Added a persistent Bonjour hostname and last-known address configuration.
+- Added background address monitoring and automatic bridge restart when DHCP
+  changes the printer's IP address.
+- Kept the ability to run an installed 1.3.x AirSane runtime as a migration
+  fallback, while 1.4.0 packages use the direct bridge.
+- Verified an Image Capture overview and a physical 150 dpi color JPEG scan
+  through the direct bridge on a Canon G3810/G3010-series device.
+
 ## 1.3.0 - 2026-07-24
 
 - Replaced the Docker scanning runtime with native arm64/x86_64 macOS

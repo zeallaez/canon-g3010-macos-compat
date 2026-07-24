@@ -2,7 +2,6 @@
 set -eu
 
 readonly SANE_AIRSCAN_COMMIT="9da18d88c88f542671b24fc0433dd7d69dcb0132"
-readonly AIRSANE_COMMIT="129cc3bf7258251a0a694dee7741285b59d88f9f"
 readonly AVAHI_VERSION="0.9-rc5"
 
 script_dir="${0:A:h}"
@@ -27,9 +26,6 @@ info() {
 
 command -v brew >/dev/null 2>&1 ||
   fail "Homebrew is required for maintainer build dependencies"
-command -v cmake >/dev/null 2>&1 ||
-  fail "cmake is required; install it with: brew install cmake"
-
 for formula in sane-backends gnutls jpeg-turbo libpng libtiff; do
   brew --prefix "${formula}" >/dev/null 2>&1 ||
     fail "missing build dependency: brew install ${formula}"
@@ -42,15 +38,13 @@ readonly jpeg_prefix="$(brew --prefix jpeg-turbo)"
 readonly png_prefix="$(brew --prefix libpng)"
 readonly tiff_prefix="$(brew --prefix libtiff)"
 readonly sdk_root="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
-readonly cmake_bin="$(command -v cmake)"
 
 /bin/mkdir -p "${downloads}" "${sources}" "${objects}"
 /bin/rm -rf "${runtime}"
 /bin/mkdir -p \
   "${runtime}/bin" \
   "${runtime}/lib/sane" \
-  "${runtime}/licenses/sane-airscan" \
-  "${runtime}/licenses/AirSane"
+  "${runtime}/licenses/sane-airscan"
 
 fetch() {
   local url="$1"
@@ -71,25 +65,19 @@ extract_clean() {
 }
 
 sane_archive="${downloads}/sane-airscan-${SANE_AIRSCAN_COMMIT}.tar.gz"
-airsane_archive="${downloads}/AirSane-${AIRSANE_COMMIT}.tar.gz"
 avahi_archive="${downloads}/avahi-${AVAHI_VERSION}.tar.gz"
 
 fetch \
   "https://github.com/alexpevzner/sane-airscan/archive/${SANE_AIRSCAN_COMMIT}.tar.gz" \
   "${sane_archive}"
 fetch \
-  "https://github.com/SimulPiscator/AirSane/archive/${AIRSANE_COMMIT}.tar.gz" \
-  "${airsane_archive}"
-fetch \
   "https://github.com/avahi/avahi/archive/refs/tags/v${AVAHI_VERSION}.tar.gz" \
   "${avahi_archive}"
 
 sane_source="${sources}/sane-airscan"
-airsane_source="${sources}/AirSane"
 avahi_source="${sources}/avahi"
 
 extract_clean "${sane_archive}" "${sane_source}"
-extract_clean "${airsane_archive}" "${airsane_source}"
 extract_clean "${avahi_archive}" "${avahi_source}"
 
 info "Applying the audited macOS portability patches"
@@ -97,11 +85,6 @@ info "Applying the audited macOS portability patches"
   cd "${sane_source}"
   /usr/bin/patch -p1 <"${script_dir}/patches/sane-airscan-macos.patch"
 )
-(
-  cd "${airsane_source}"
-  /usr/bin/patch -p1 <"${script_dir}/patches/airsane-no-mdns-gate.patch"
-)
-
 /bin/cp -X \
   "${script_dir}/airscan-macos-compat.h" \
   "${script_dir}/airscan-macos-compat.c" \
@@ -160,16 +143,18 @@ info "Building the native WSD SANE backend"
   /bin/ln -sf libsane-airscan.1.so libsane-airscan.so
 )
 
-info "Building the native eSCL bridge"
-/bin/rm -rf "${objects}/AirSane"
-"${cmake_bin}" \
-  -S "${airsane_source}" \
-  -B "${objects}/AirSane" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="${sane_prefix};${brew_prefix};${jpeg_prefix};${png_prefix}"
-"${cmake_bin}" --build "${objects}/AirSane" --parallel
+info "Building the lightweight direct eSCL bridge"
+/usr/bin/xcrun clang++ \
+  -std=c++17 \
+  -O2 \
+  -pthread \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -mmacosx-version-min=11.0 \
+  "${script_dir}/direct-escl-bridge.cpp" \
+  -o "${runtime}/bin/canon-g3010-escl-bridge"
 
-/bin/cp -X "${objects}/AirSane/airsaned" "${runtime}/bin/airsaned"
 /bin/cp -X "${sane_prefix}/bin/scanimage" "${runtime}/bin/scanimage"
 
 for license in COPYING LICENSE; do
@@ -177,16 +162,12 @@ for license in COPYING LICENSE; do
     /bin/cp -X "${sane_source}/${license}" \
       "${runtime}/licenses/sane-airscan/${license}"
   fi
-  if [[ -f "${airsane_source}/${license}" ]]; then
-    /bin/cp -X "${airsane_source}/${license}" \
-      "${runtime}/licenses/AirSane/${license}"
-  fi
 done
 
 typeset -a queue
 typeset -A queued
 queue=(
-  "${runtime}/bin/airsaned"
+  "${runtime}/bin/canon-g3010-escl-bridge"
   "${runtime}/bin/scanimage"
   "${runtime}/lib/sane/libsane-airscan.1.so"
 )
@@ -279,7 +260,7 @@ if /usr/bin/find "${runtime}" -type f -print0 |
 fi
 
 /bin/chmod 0755 \
-  "${runtime}/bin/airsaned" \
+  "${runtime}/bin/canon-g3010-escl-bridge" \
   "${runtime}/bin/scanimage"
 
 info "Native runtime built at ${runtime}"

@@ -9,11 +9,11 @@ Printing pairs:
 
 - Canon's official G3000 macOS CUPS renderer;
 - the G3010's native BJRaster3-compatible print language; and
-- the printer's raw LPD `auto` queue.
+- the printer's Bonjour-advertised network queue.
 
 Scanning uses the printer's standards-based WSD Scan service through a native
-macOS build of `sane-airscan`. A native AirSane bridge re-publishes it as
-eSCL/AirScan for Apple's Image Capture interface.
+macOS build of `sane-airscan`. The project's lightweight native bridge accepts
+eSCL/AirScan jobs directly and invokes that WSD scan path for Image Capture.
 
 Tested on an Apple silicon Mac running macOS 26.5.2 with Canon's G3000 CUPS
 driver 16.91.0.0. A physical scan initiated from Apple Image Capture was
@@ -28,12 +28,14 @@ verified on a Canon G3810 sold as part of the G3010 series.
 
 - Creates a system printer named `Canon_G3010`.
 - Automatically discovers the default `Canon G3010 series` service.
+- Reuses the printer's real Bonjour UUID and product name for print and scan.
+- Automatically reconnects through the stable hostname after a DHCP change.
 - Supports an explicit hostname when automatic discovery is unavailable.
 - Configures A4, color, plain paper, normal quality, and one-sided printing.
 - Can send a macOS test page.
 - Includes a reversible uninstaller and a read-only diagnostic tool.
 - Scans over Wi-Fi/LAN without USB or a cloud service.
-- Appears as `Canon G3010 Scanner` in Apple Image Capture and compatible
+- Appears as `Canon G3010 series` in Apple Image Capture and compatible
   macOS scan panels.
 - Supports 150/300/600 dpi, color/grayscale, A4/Letter/full-bed, and
   JPEG/PNG/TIFF/PDF output through the GUI or CLI.
@@ -68,7 +70,7 @@ The installer verifies that this file exists before changing the print queue:
 ### Install from a release package
 
 1. Install Canon's official G3000 CUPS driver.
-2. Download `Canon-G3010-macOS-Compat-1.3.0.pkg` from GitHub Releases.
+2. Download `Canon-G3010-macOS-Compat-1.4.0.pkg` from GitHub Releases.
 3. Open the package and follow the macOS installer.
 4. Print to `Canon G3010 series (Mac compatibility)`.
 
@@ -77,7 +79,7 @@ Terminal method instead of disabling Gatekeeper:
 
 ```sh
 sudo installer \
-  -pkg Canon-G3010-macOS-Compat-1.3.0.pkg \
+  -pkg Canon-G3010-macOS-Compat-1.4.0.pkg \
   -target /
 ```
 
@@ -114,7 +116,7 @@ Then:
 
 1. Put the original face-down on the scanner glass.
 2. Open **Image Capture** (`图像捕捉`).
-3. Select **Canon G3010 Scanner** under **Shared**.
+3. Select **Canon G3010 series** under **Shared**.
 4. Choose the size or **Show Details**, then click **Scan**.
 
 Check the bridge without moving the scanner head:
@@ -209,14 +211,13 @@ Canon G3010 scanner
 JPEG/PNG/TIFF on the Mac
 ```
 
-For Image Capture, AirSane adds a standards adapter in front:
+For Image Capture, the project adds a lightweight standards adapter:
 
 ```text
 Apple Image Capture / macOS scan panel
       ↓  eSCL/AirScan over localhost
-native AirSane bridge
-      ↓  SANE
-sane-airscan
+direct native eSCL bridge
+      ↓  scanimage / sane-airscan
       ↓  WSD Scan SOAP/HTTP
 Canon G3010 scanner
 ```
@@ -237,8 +238,8 @@ make native
 make package
 ```
 
-Maintainer builds require Homebrew packages `cmake`, `sane-backends`,
-`gnutls`, `jpeg-turbo`, `libpng`, and `libtiff`. The resulting `.pkg` bundles
+Maintainer builds require Homebrew packages `sane-backends`, `gnutls`,
+`jpeg-turbo`, `libpng`, and `libtiff`. The resulting `.pkg` bundles
 the native runtime, so end users do not need Homebrew.
 
 Artifacts are written to `dist/`:

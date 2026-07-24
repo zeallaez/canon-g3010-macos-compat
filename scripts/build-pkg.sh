@@ -57,7 +57,7 @@ trap cleanup EXIT INT TERM
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/uninstall.sh" \
   "${payload_root}/usr/local/bin/canon-g3010-scan" \
   "${payload_root}/usr/local/bin/canon-g3010-scanner-bridge" \
-  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-native/bin/airsaned" \
+  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-native/bin/canon-g3010-escl-bridge" \
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-native/bin/scanimage" \
   "${repo_root}/package/scripts/preinstall" \
   "${repo_root}/package/scripts/postinstall"

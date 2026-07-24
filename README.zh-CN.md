@@ -9,11 +9,11 @@ Canon PIXMA G3010，也可以使用它的平板扫描仪。
 
 - 佳能官方 G3000 macOS CUPS 渲染器；
 - G3010 原生兼容的 BJRaster3 打印语言；
-- 打印机提供的 LPD `auto` 原始队列。
+- 打印机通过 Bonjour 广播的网络队列。
 
 扫描功能通过打印机的标准 WSD Scan 服务和原生 macOS 版
-`sane-airscan`。原生 AirSane 桥接层会把它重新发布成 eSCL/AirScan
-扫描仪，因此可以直接显示在 Apple“图像捕捉”和兼容的 macOS 扫描面板里。
+`sane-airscan`。本项目的轻量原生桥接会直接接收 eSCL/AirScan 任务并调用
+WSD 扫描链路，因此可以显示在 Apple“图像捕捉”和兼容的 macOS 扫描面板里。
 
 已在 Apple 芯片 Mac、macOS 26.5.2 和佳能 G3000 CUPS 驱动
 16.91.0.0 上测试；已从 Apple“图像捕捉”对国行 G3810（属于 G3010 系列）
@@ -28,13 +28,15 @@ Canon PIXMA G3010，也可以使用它的平板扫描仪。
 
 - 创建名为 `Canon_G3010` 的系统打印队列；
 - 自动发现默认名称为 `Canon G3010 series` 的局域网服务；
+- 打印与扫描复用打印机的真实 Bonjour UUID 和产品名；
+- 路由器重新分配 IP 后根据稳定主机名自动重连；
 - 自动发现失败时可手动指定打印机主机名；
 - 默认配置 A4、彩色、普通纸、正常质量和单面打印；
 - 可选发送一张 macOS 测试页；
 - 提供可逆的卸载脚本和只读诊断工具；
 - 通过 Wi-Fi/局域网扫描，不需要 USB，也不经过云端；
 - 在 Apple“图像捕捉”和兼容的 macOS 扫描面板中显示为
-  `Canon G3010 Scanner`；
+  `Canon G3010 series`；
 - 支持 150/300/600 dpi、彩色/灰度、A4/Letter/全玻璃板，以及
   图形界面或命令行 JPEG/PNG/TIFF/PDF 输出；
 - 扫描不需要打印机网页管理员密码；
@@ -66,7 +68,7 @@ Canon PIXMA G3010，也可以使用它的平板扫描仪。
 
 1. 安装佳能官方 G3000 CUPS 驱动。
 2. 从 GitHub Releases 下载
-   `Canon-G3010-macOS-Compat-1.3.0.pkg`。
+   `Canon-G3010-macOS-Compat-1.4.0.pkg`。
 3. 打开安装包，按照 macOS 安装器提示操作。
 4. 打印时选择 `Canon G3010 series (Mac compatibility)`。
 
@@ -75,7 +77,7 @@ Canon PIXMA G3010，也可以使用它的平板扫描仪。
 
 ```sh
 sudo installer \
-  -pkg Canon-G3010-macOS-Compat-1.3.0.pkg \
+  -pkg Canon-G3010-macOS-Compat-1.4.0.pkg \
   -target /
 ```
 
@@ -111,7 +113,7 @@ Release 安装包会在能够发现打印机时，为当前登录用户自动安
 
 1. 把原稿正面朝下放到扫描玻璃板；
 2. 打开系统“图像捕捉”；
-3. 在左侧“共享”下选择 `Canon G3010 Scanner`；
+3. 在左侧“共享”下选择 `Canon G3010 series`；
 4. 选择尺寸，或点“显示详细信息”，然后点“扫描”。
 
 不移动扫描头即可查看后台状态：
@@ -210,9 +212,8 @@ Mac 上的 JPEG/PNG/TIFF 文件
 ```text
 Apple“图像捕捉”/ macOS 扫描面板
       ↓  eSCL/AirScan（仅本机）
-原生 AirSane 桥接
-      ↓  SANE
-sane-airscan
+轻量直接 eSCL 桥接
+      ↓  scanimage / sane-airscan
       ↓  WSD Scan SOAP/HTTP
 Canon G3010 扫描仪
 ```
@@ -234,8 +235,8 @@ make native
 make package
 ```
 
-维护者构建需要 Homebrew 的 `cmake`、`sane-backends`、`gnutls`、
-`jpeg-turbo`、`libpng` 和 `libtiff`。最终 `.pkg` 已捆绑原生运行环境，
+维护者构建需要 Homebrew 的 `sane-backends`、`gnutls`、`jpeg-turbo`、
+`libpng` 和 `libtiff`。最终 `.pkg` 已捆绑原生运行环境，
 普通用户不需要安装 Homebrew。
 
 产物位于 `dist/`：

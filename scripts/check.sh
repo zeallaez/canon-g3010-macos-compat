@@ -36,14 +36,25 @@ for bridge_file in \
   scanner/native/airscan-macos-compat.c \
   scanner/native/airscan-macos-compat.h \
   scanner/native/airscan-mdns-disabled.c \
+  scanner/native/direct-escl-bridge.cpp \
   scanner/native/build-native.sh \
-  scanner/native/patches/sane-airscan-macos.patch \
-  scanner/native/patches/airsane-no-mdns-gate.patch; do
+  scanner/native/patches/sane-airscan-macos.patch; do
   [[ -s "${repo_root}/${bridge_file}" ]] || {
     print -u2 -- "Missing or empty: ${bridge_file}"
     exit 1
   }
 done
+
+if [[ "$(/usr/bin/uname -s)" == "Darwin" ]]; then
+  /usr/bin/xcrun clang++ \
+    -std=c++17 \
+    -pthread \
+    -Wall \
+    -Wextra \
+    -Werror \
+    -fsyntax-only \
+    "${repo_root}/scanner/native/direct-escl-bridge.cpp"
+fi
 
 for doc in \
   README.md \

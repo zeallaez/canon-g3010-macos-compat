@@ -1,13 +1,13 @@
 #!/bin/zsh
 set -eu
 
-readonly BRIDGE_VERSION="1.3.0"
+readonly BRIDGE_VERSION="1.4.0"
 readonly LABEL="io.github.zeallaez.canon-g3010-scanner-bridge"
-readonly SERVICE_NAME="Canon G3010 Scanner"
+readonly SERVICE_NAME="Canon G3010 series"
 readonly SERVICE_TYPE="_uscan._tcp"
 readonly PROXY_HOST="canon-g3010-bridge.local."
 readonly SERVICE_PORT="8090"
-readonly SCANNER_UUID="7f2e31cb-c289-5757-b366-dde86d548b49"
+readonly FALLBACK_UUID="7f2e31cb-c289-5757-b366-dde86d548b49"
 readonly DEFAULT_QUEUE="Canon_G3010"
 readonly DEFAULT_PRINTER_SERVICE="Canon G3010 series"
 readonly LEGACY_CONTAINER="canon-g3010-airscan-bridge"
@@ -22,16 +22,23 @@ source_runtime="${script_dir:h:h}/build/native-runtime"
 launch_agents_dir="${HOME}/Library/LaunchAgents"
 plist_path="${launch_agents_dir}/${LABEL}.plist"
 log_dir="${HOME}/Library/Logs/Canon G3010 macOS Compat"
+settings_path="${support_dir}/config/bridge.conf"
 
 action="${1:-status}"
 (( $# > 0 )) && shift
+cli_printer_ip=""
 printer_ip=""
+preferred_ip=""
+printer_host=""
+printer_uuid="${FALLBACK_UUID}"
 engine_pid=""
 bonjour_pid=""
+shutting_down="no"
+engine_kind="unknown"
 
 usage() {
   cat <<'EOF'
-Canon G3010 native macOS Image Capture bridge
+Canon G3010 native macOS multifunction scanner bridge
 
 Usage:
   canon-g3010-scanner-bridge COMMAND [--ip ADDRESS]
@@ -40,16 +47,16 @@ Commands:
   install     Install and start the per-user native background bridge.
   start       Start an already installed bridge.
   stop        Stop the bridge.
-  status      Show launch agent and eSCL status.
+  status      Show identity, address, launch agent, and eSCL status.
   uninstall   Remove the bridge and its private files.
-  run         Run in the foreground (used by launchd).
+  run         Run the auto-reconnecting supervisor (used by launchd).
 
 Options:
-  --ip ADDRESS  Printer IPv4 address. If omitted, use the Canon_G3010
-                print queue or local DNS-SD discovery.
+  --ip ADDRESS  Initial/fallback printer IPv4 address. The bridge still tracks
+                the printer's stable Bonjour hostname when it is available.
 
-Docker is not required. After installation, open Apple's Image Capture
-and select "Canon G3010 Scanner" under Shared.
+The scanner uses the printer's real Bonjour UUID, so macOS can associate
+printing and scanning with the same multifunction device. Docker is not used.
 EOF
 }
 
@@ -74,6 +81,14 @@ validate_ipv4() {
   done
 }
 
+validate_hostname() {
+  [[ "$1" =~ '^[A-Za-z0-9._-]+$' ]]
+}
+
+validate_uuid() {
+  [[ "$1" =~ '^[A-Fa-f0-9-]{32,36}$' ]]
+}
+
 resolve_ipv4() {
   local host="$1"
   local resolved
@@ -90,6 +105,15 @@ resolve_ipv4() {
   print -r -- "${resolved}"
 }
 
+probe_wsd() {
+  local address="$1"
+  validate_ipv4 "${address}" || return 1
+  /usr/bin/curl --silent --show-error \
+    --connect-timeout 2 --max-time 4 \
+    --output /dev/null \
+    "http://${address}:80/wsd/scanservice.cgi"
+}
+
 discover_queue_host() {
   /usr/bin/lpstat -v "${DEFAULT_QUEUE}" 2>/dev/null |
     /usr/bin/sed -nE \
@@ -97,9 +121,9 @@ discover_queue_host() {
     /usr/bin/head -n 1
 }
 
-discover_dnssd_host() {
-  local lookup_file lookup_pid resolved_host i
-  lookup_file="$(/usr/bin/mktemp -t canon-g3010-native-dnssd)"
+discover_dnssd_record() {
+  local lookup_file lookup_pid i host uuid address
+  lookup_file="$(/usr/bin/mktemp -t canon-g3010-identity)"
 
   /usr/bin/dns-sd \
     -L "${DEFAULT_PRINTER_SERVICE}" \
@@ -108,51 +132,146 @@ discover_dnssd_host() {
   lookup_pid=$!
 
   for i in {1..10}; do
-    /usr/bin/grep -q "can be reached at" "${lookup_file}" && break
+    /usr/bin/grep -q "can be reached at" "${lookup_file}" &&
+      /usr/bin/grep -q "UUID=" "${lookup_file}" &&
+      break
     /bin/sleep 1
   done
 
   /bin/kill "${lookup_pid}" 2>/dev/null || true
   wait "${lookup_pid}" 2>/dev/null || true
-  resolved_host="$(
+  host="$(
     /usr/bin/sed -nE \
       's/.* can be reached at ([^: ]+):[0-9]+.*/\1/p' \
       "${lookup_file}" |
       /usr/bin/head -n 1
   )"
+  uuid="$(
+    /usr/bin/sed -nE 's/.*(^|[[:space:]])UUID=([^[:space:]]+).*/\2/p' \
+      "${lookup_file}" |
+      /usr/bin/head -n 1
+  )"
   /bin/rm -f "${lookup_file}"
-  print -r -- "${resolved_host}"
+
+  [[ -n "${host}" ]] || return 1
+  validate_hostname "${host}" || return 1
+  address="$(resolve_ipv4 "${host}")"
+  validate_ipv4 "${address}" || return 1
+
+  printer_host="${host}"
+  printer_ip="${address}"
+  if validate_uuid "${uuid}"; then
+    printer_uuid="${uuid}"
+  fi
 }
 
-discover_printer_ip() {
-  local host resolved
-  host="$(discover_queue_host)"
-  if [[ -z "${host}" ]]; then
-    info "The print queue was not found; trying DNS-SD discovery" >&2
-    host="$(discover_dnssd_host)"
+load_settings() {
+  local key value
+  [[ -f "${settings_path}" ]] || return 0
+
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      preferred_ip)
+        validate_ipv4 "${value}" && preferred_ip="${value}"
+        ;;
+      printer_host)
+        validate_hostname "${value}" && printer_host="${value}"
+        ;;
+      printer_uuid)
+        validate_uuid "${value}" && printer_uuid="${value}"
+        ;;
+    esac
+  done <"${settings_path}"
+}
+
+write_settings() {
+  /bin/mkdir -p "${settings_path:h}"
+  umask 077
+  {
+    print -- "preferred_ip=${preferred_ip}"
+    print -- "printer_host=${printer_host}"
+    print -- "printer_uuid=${printer_uuid}"
+  } >"${settings_path}"
+}
+
+refresh_identity() {
+  local requested_ip="${printer_ip}"
+  if discover_dnssd_record; then
+    preferred_ip="${printer_ip}"
+    return 0
   fi
-  [[ -n "${host}" ]] || return 1
-  resolved="$(resolve_ipv4 "${host}")"
-  validate_ipv4 "${resolved}" || return 1
-  print -r -- "${resolved}"
+
+  if [[ -n "${printer_host}" ]]; then
+    printer_ip="$(resolve_ipv4 "${printer_host}")"
+    if validate_ipv4 "${printer_ip}"; then
+      preferred_ip="${printer_ip}"
+      return 0
+    fi
+  fi
+
+  if [[ -z "${requested_ip}" ]]; then
+    local queue_host
+    queue_host="$(discover_queue_host)"
+    if [[ -n "${queue_host}" ]]; then
+      printer_host="${queue_host}"
+      printer_ip="$(resolve_ipv4 "${queue_host}")"
+    fi
+  else
+    printer_ip="${requested_ip}"
+  fi
+
+  if ! validate_ipv4 "${printer_ip}"; then
+    printer_ip="${preferred_ip}"
+  fi
+  validate_ipv4 "${printer_ip}" || return 1
+  preferred_ip="${printer_ip}"
+}
+
+resolve_current_ip() {
+  local resolved=""
+  if [[ -n "${printer_host}" ]]; then
+    resolved="$(resolve_ipv4 "${printer_host}")"
+    if validate_ipv4 "${resolved}" && probe_wsd "${resolved}"; then
+      print -r -- "${resolved}"
+      return 0
+    fi
+  fi
+
+  printer_ip=""
+  if discover_dnssd_record && probe_wsd "${printer_ip}"; then
+    preferred_ip="${printer_ip}"
+    write_settings
+    print -r -- "${printer_ip}"
+    return 0
+  fi
+
+  if validate_ipv4 "${preferred_ip}" && probe_wsd "${preferred_ip}"; then
+    print -r -- "${preferred_ip}"
+    return 0
+  fi
+  return 1
 }
 
 select_runtime() {
-  if [[ -x "${installed_runtime}/bin/airsaned" ]]; then
-    print -r -- "${installed_runtime}"
-  elif [[ -x "${system_runtime}/bin/airsaned" ]]; then
-    print -r -- "${system_runtime}"
-  elif [[ -x "${source_runtime}/bin/airsaned" ]]; then
-    print -r -- "${source_runtime}"
-  else
-    return 1
-  fi
+  local candidate
+  for candidate in \
+    "${installed_runtime}" \
+    "${system_runtime}" \
+    "${source_runtime}"; do
+    if [[ -x "${candidate}/bin/canon-g3010-escl-bridge" ||
+          -x "${candidate}/bin/airsaned" ]]; then
+      print -r -- "${candidate}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 check_runtime() {
   local runtime="$1"
-  [[ -x "${runtime}/bin/airsaned" ]] ||
-    fail "native AirSane runtime is missing: ${runtime}/bin/airsaned"
+  [[ -x "${runtime}/bin/canon-g3010-escl-bridge" ||
+     -x "${runtime}/bin/airsaned" ]] ||
+    fail "native eSCL runtime is missing from ${runtime}/bin"
   [[ -x "${runtime}/bin/scanimage" ]] ||
     fail "native scanimage runtime is missing: ${runtime}/bin/scanimage"
   [[ -f "${runtime}/lib/sane/libsane-airscan.1.so" ]] ||
@@ -211,74 +330,160 @@ cleanup_legacy_container() {
 }
 
 stop_children() {
-  trap - EXIT INT TERM
   [[ -n "${bonjour_pid}" ]] &&
     /bin/kill "${bonjour_pid}" 2>/dev/null || true
   [[ -n "${engine_pid}" ]] &&
     /bin/kill "${engine_pid}" 2>/dev/null || true
   [[ -n "${bonjour_pid}" ]] && wait "${bonjour_pid}" 2>/dev/null || true
   [[ -n "${engine_pid}" ]] && wait "${engine_pid}" 2>/dev/null || true
+  bonjour_pid=""
+  engine_pid=""
 }
 
-run_bridge() {
+shutdown_supervisor() {
+  shutting_down="yes"
+  stop_children
+}
+
+start_engine() {
   local runtime="$1"
   local sane_dir="${support_dir}/config/sane.d"
   local airsane_dir="${support_dir}/config/airsane"
-  local i
 
-  check_runtime "${runtime}"
-  trap stop_children EXIT INT TERM
-
-  info "Starting native eSCL bridge for ${printer_ip}"
-  SANE_CONFIG_DIR="${sane_dir}" \
-  LD_LIBRARY_PATH="${runtime}/lib/sane" \
-    "${runtime}/bin/airsaned" \
-      --listen-port="${SERVICE_PORT}" \
-      --interface=lo0 \
-      --mdns-announce=false \
-      --announce-base-url="http://127.0.0.1:${SERVICE_PORT}" \
-      --hotplug=false \
-      --network-hotplug=false \
-      --disclose-version=false \
-      --options-file="${airsane_dir}/options.conf" \
-      --ignore-list="${airsane_dir}/ignore.conf" \
-      --access-file="${airsane_dir}/access.conf" \
+  if [[ -x "${runtime}/bin/canon-g3010-escl-bridge" ]]; then
+    engine_kind="direct WSD-to-eSCL"
+    "${runtime}/bin/canon-g3010-escl-bridge" \
+      --listen-port "${SERVICE_PORT}" \
+      --runtime-dir "${runtime}" \
+      --config-dir "${sane_dir}" \
+      --printer-ip "${printer_ip}" \
+      --uuid "${printer_uuid}" \
+      --service-name "${SERVICE_NAME}" \
       >>"${log_dir}/native-engine.log" 2>&1 &
+  else
+    engine_kind="AirSane fallback"
+    SANE_CONFIG_DIR="${sane_dir}" \
+    LD_LIBRARY_PATH="${runtime}/lib/sane" \
+      "${runtime}/bin/airsaned" \
+        --listen-port="${SERVICE_PORT}" \
+        --interface=lo0 \
+        --mdns-announce=false \
+        --announce-base-url="http://127.0.0.1:${SERVICE_PORT}" \
+        --hotplug=false \
+        --network-hotplug=false \
+        --disclose-version=false \
+        --options-file="${airsane_dir}/options.conf" \
+        --ignore-list="${airsane_dir}/ignore.conf" \
+        --access-file="${airsane_dir}/access.conf" \
+        >>"${log_dir}/native-engine.log" 2>&1 &
+  fi
   engine_pid=$!
+}
 
+wait_until_ready() {
+  local i
   for i in {1..60}; do
     if /usr/bin/curl --fail --silent --max-time 2 \
       "http://127.0.0.1:${SERVICE_PORT}/eSCL/ScannerCapabilities" \
       >/dev/null; then
-      break
+      return 0
     fi
-    /bin/kill -0 "${engine_pid}" 2>/dev/null ||
-      fail "the native eSCL engine exited during startup"
+    /bin/kill -0 "${engine_pid}" 2>/dev/null || return 1
     /bin/sleep 1
   done
+  return 1
+}
 
-  /usr/bin/curl --fail --silent --max-time 3 \
-    "http://127.0.0.1:${SERVICE_PORT}/eSCL/ScannerCapabilities" \
-    >/dev/null ||
-    fail "the native eSCL bridge did not become ready"
-
-  info "Publishing ${SERVICE_NAME} to macOS Image Capture"
+publish_scanner() {
+  local admin_host="${printer_host:-${printer_ip}}"
   /usr/bin/dns-sd \
     -P "${SERVICE_NAME}" "${SERVICE_TYPE}" local. "${SERVICE_PORT}" \
     "${PROXY_HOST}" "127.0.0.1" \
     "txtvers=1" \
     "vers=2.0" \
-    "pdl=application/pdf,image/jpeg,image/png" \
-    "ty=Canon G3010 Scanner" \
-    "note=Native macOS bridge" \
-    "uuid=${SCANNER_UUID}" \
+    "pdl=image/jpeg,image/png" \
+    "ty=${SERVICE_NAME}" \
+    "product=(${SERVICE_NAME})" \
+    "note=Native macOS multifunction bridge" \
+    "adminurl=http://${admin_host}" \
+    "UUID=${printer_uuid}" \
     "rs=eSCL" \
     "cs=grayscale,color" \
     "is=platen" \
-    "duplex=F" &
+    "duplex=F" \
+    "Scan=T" &
   bonjour_pid=$!
+}
 
-  wait "${bonjour_pid}"
+run_session() {
+  local runtime="$1"
+  local candidate failures=0
+
+  write_runtime_config
+  start_engine "${runtime}"
+  info "Starting ${engine_kind} bridge for ${printer_ip}"
+  if ! wait_until_ready; then
+    stop_children
+    return 1
+  fi
+
+  info "Publishing ${SERVICE_NAME} with UUID ${printer_uuid}"
+  publish_scanner
+
+  while [[ "${shutting_down}" == "no" ]]; do
+    /bin/sleep 15
+    /bin/kill -0 "${engine_pid}" 2>/dev/null || return 1
+    /bin/kill -0 "${bonjour_pid}" 2>/dev/null || return 1
+
+    candidate="$(resolve_current_ip 2>/dev/null || true)"
+    if validate_ipv4 "${candidate}"; then
+      failures=0
+      if [[ "${candidate}" != "${printer_ip}" ]]; then
+        info "Printer address changed: ${printer_ip} -> ${candidate}"
+        printer_ip="${candidate}"
+        preferred_ip="${candidate}"
+        write_settings
+        return 2
+      fi
+    else
+      (( failures += 1 ))
+      if (( failures >= 3 )); then
+        info "Printer is unavailable; rediscovering"
+        return 3
+      fi
+    fi
+  done
+  return 0
+}
+
+run_supervisor() {
+  local runtime candidate
+  runtime="$(select_runtime)" || fail "native runtime is missing"
+  check_runtime "${runtime}"
+  load_settings
+  if [[ -n "${cli_printer_ip}" ]]; then
+    preferred_ip="${cli_printer_ip}"
+  fi
+  trap shutdown_supervisor EXIT INT TERM
+
+  while [[ "${shutting_down}" == "no" ]]; do
+    candidate="$(resolve_current_ip 2>/dev/null || true)"
+    if ! validate_ipv4 "${candidate}"; then
+      info "Printer not found; retrying discovery in 10 seconds"
+      /bin/sleep 10
+      continue
+    fi
+    printer_ip="${candidate}"
+    preferred_ip="${candidate}"
+    write_settings
+
+    info "Using ${SERVICE_NAME} at ${printer_ip}"
+    run_session "${runtime}" || true
+    stop_children
+    [[ "${shutting_down}" == "yes" ]] && break
+    info "Restarting bridge after network or engine change"
+    /bin/sleep 3
+  done
 }
 
 write_launch_agent() {
@@ -297,8 +502,6 @@ write_launch_agent() {
     print -- '  <array>'
     print -- "    <string>${installed_bridge}</string>"
     print -- '    <string>run</string>'
-    print -- '    <string>--ip</string>'
-    print -- "    <string>${printer_ip}</string>"
     print -- '  </array>'
     print -- '  <key>RunAtLoad</key>'
     print -- '  <true/>'
@@ -319,21 +522,24 @@ write_launch_agent() {
 
 install_bridge() {
   local runtime
-  if [[ -x "${system_runtime}/bin/airsaned" ]]; then
+  if [[ -x "${system_runtime}/bin/canon-g3010-escl-bridge" ]]; then
     runtime="${system_runtime}"
-  elif [[ -x "${source_runtime}/bin/airsaned" ]]; then
+  elif [[ -x "${source_runtime}/bin/canon-g3010-escl-bridge" ]]; then
     runtime="${source_runtime}"
-  elif [[ -x "${installed_runtime}/bin/airsaned" ]]; then
+  elif [[ -x "${installed_runtime}/bin/canon-g3010-escl-bridge" ]]; then
     runtime="${installed_runtime}"
   else
-    fail "native runtime is not built or installed"
+    runtime="$(select_runtime)" || fail "native runtime is not built or installed"
   fi
   check_runtime "${runtime}"
 
-  if [[ -z "${printer_ip}" ]]; then
-    printer_ip="$(discover_printer_ip)" ||
-      fail "printer discovery failed; rerun with --ip ADDRESS"
-  fi
+  load_settings
+  printer_ip="${cli_printer_ip}"
+  refresh_identity ||
+    fail "printer discovery failed; rerun with --ip ADDRESS"
+  preferred_ip="${printer_ip}"
+  probe_wsd "${printer_ip}" ||
+    fail "the WSD scanner is not reachable at ${printer_ip}"
 
   /bin/launchctl bootout "gui/$(/usr/bin/id -u)" "${plist_path}" \
     >/dev/null 2>&1 || true
@@ -347,12 +553,15 @@ install_bridge() {
   fi
   /bin/cp -X "${script_path}" "${installed_bridge}"
   /bin/chmod 0755 "${installed_bridge}" \
-    "${installed_runtime}/bin/airsaned" \
     "${installed_runtime}/bin/scanimage"
+  [[ ! -f "${installed_runtime}/bin/canon-g3010-escl-bridge" ]] ||
+    /bin/chmod 0755 "${installed_runtime}/bin/canon-g3010-escl-bridge"
+  [[ ! -f "${installed_runtime}/bin/airsaned" ]] ||
+    /bin/chmod 0755 "${installed_runtime}/bin/airsaned"
 
+  write_settings
   write_runtime_config
   write_launch_agent
-
   /bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "${plist_path}"
 
   for _ in {1..60}; do
@@ -361,20 +570,24 @@ install_bridge() {
       >/dev/null && break
     /bin/sleep 1
   done
-
   /usr/bin/curl --fail --silent --max-time 3 \
     "http://127.0.0.1:${SERVICE_PORT}/eSCL/ScannerCapabilities" \
     >/dev/null ||
     fail "the installed native bridge did not become ready"
 
-  info "Native scanner bridge installed; Docker is not used"
+  info "Multifunction identity: ${printer_uuid}"
+  info "Automatic IP reconnection: enabled"
+  info "Direct WSD-to-eSCL bridge installed; Docker is not used"
 }
 
 start_bridge() {
   [[ -f "${plist_path}" ]] || fail "bridge is not installed"
-  /bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "${plist_path}" \
-    >/dev/null 2>&1 || true
-  /bin/launchctl kickstart -k "gui/$(/usr/bin/id -u)/${LABEL}"
+  if /bin/launchctl print "gui/$(/usr/bin/id -u)/${LABEL}" \
+    >/dev/null 2>&1; then
+    /bin/launchctl kickstart -k "gui/$(/usr/bin/id -u)/${LABEL}"
+  else
+    /bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "${plist_path}"
+  fi
   info "Native scanner bridge started"
 }
 
@@ -388,7 +601,11 @@ stop_bridge() {
 status_bridge() {
   local launch_status="stopped"
   local endpoint_status="unreachable"
+  local current_ip=""
+  local runtime=""
 
+  load_settings
+  current_ip="$(resolve_current_ip 2>/dev/null || true)"
   if /bin/launchctl print "gui/$(/usr/bin/id -u)/${LABEL}" \
     >/dev/null 2>&1; then
     launch_status="running"
@@ -398,8 +615,19 @@ status_bridge() {
     >/dev/null; then
     endpoint_status="ready"
   fi
+  runtime="$(select_runtime 2>/dev/null || true)"
+  if [[ -x "${runtime}/bin/canon-g3010-escl-bridge" ]]; then
+    engine_kind="direct WSD-to-eSCL"
+  elif [[ -x "${runtime}/bin/airsaned" ]]; then
+    engine_kind="AirSane fallback"
+  fi
 
   print -- "Bridge version: ${BRIDGE_VERSION}"
+  print -- "Engine: ${engine_kind}"
+  print -- "Multifunction UUID: ${printer_uuid}"
+  print -- "Bonjour hostname: ${printer_host:-unavailable}"
+  print -- "Current printer IP: ${current_ip:-unavailable}"
+  print -- "Automatic IP reconnection: enabled"
   print -- "Runtime: native macOS (no Docker)"
   print -- "LaunchAgent: ${launch_status}"
   print -- "eSCL endpoint: ${endpoint_status}"
@@ -416,11 +644,16 @@ uninstall_bridge() {
   info "Native scanner bridge removed"
 }
 
+if [[ "${action}" == "-h" || "${action}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 while (( $# > 0 )); do
   case "$1" in
     --ip)
       (( $# >= 2 )) || fail "--ip requires a value"
-      printer_ip="$2"
+      cli_printer_ip="$2"
       shift 2
       ;;
     -h|--help)
@@ -433,8 +666,9 @@ while (( $# > 0 )); do
   esac
 done
 
-if [[ -n "${printer_ip}" ]]; then
-  validate_ipv4 "${printer_ip}" || fail "invalid IPv4 address: ${printer_ip}"
+if [[ -n "${cli_printer_ip}" ]]; then
+  validate_ipv4 "${cli_printer_ip}" ||
+    fail "invalid IPv4 address: ${cli_printer_ip}"
 fi
 
 case "${action}" in
@@ -454,12 +688,7 @@ case "${action}" in
     uninstall_bridge
     ;;
   run)
-    [[ -n "${printer_ip}" ]] || fail "run requires --ip ADDRESS"
-    runtime="$(select_runtime)" || fail "native runtime is missing"
-    run_bridge "${runtime}"
-    ;;
-  -h|--help)
-    usage
+    run_supervisor
     ;;
   *)
     fail "unknown command: ${action}"

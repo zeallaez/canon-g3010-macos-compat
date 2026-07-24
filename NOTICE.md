@@ -24,11 +24,8 @@ upstream project and through this project's reproducible build recipe.
 
 Project: https://github.com/alexpevzner/sane-airscan
 
-The macOS Image Capture bridge builds AirSane from a pinned upstream source
-revision. AirSane is an independent project licensed under GPL-3.0. Release
-packages contain its compiled executable and license. The build also bundles
-the required open-source SANE and codec dynamic libraries; their respective
-upstream license terms continue to apply. No Canon binary is included in the
-scanner runtime.
-
-Project: https://github.com/SimulPiscator/AirSane
+The macOS Image Capture bridge is original MIT-licensed project code. It
+exposes the local eSCL surface and invokes the bundled SANE command for each
+scan job. Release packages also contain the required open-source SANE and
+codec dynamic libraries; their respective upstream license terms continue to
+apply. No Canon binary is included in the scanner runtime.
