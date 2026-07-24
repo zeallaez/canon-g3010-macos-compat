@@ -1,4 +1,4 @@
-.PHONY: check package scanner-build scanner-list bridge-install bridge-status bridge-uninstall clean
+.PHONY: check package native scanner-build scanner-list bridge-install bridge-status bridge-uninstall clean
 
 check:
 	./scripts/check.sh
@@ -6,7 +6,7 @@ check:
 package: check
 	./scripts/build-pkg.sh
 
-scanner-build:
+native scanner-build:
 	./scanner/scan.sh --build
 
 scanner-list:

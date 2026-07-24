@@ -11,9 +11,9 @@ Printing pairs:
 - the G3010's native BJRaster3-compatible print language; and
 - the printer's raw LPD `auto` queue.
 
-Scanning uses the printer's standards-based WSD Scan service through
-`sane-airscan` in a small, reproducible local container. An AirSane bridge
-re-publishes it as eSCL/AirScan for Apple's Image Capture interface.
+Scanning uses the printer's standards-based WSD Scan service through a native
+macOS build of `sane-airscan`. A native AirSane bridge re-publishes it as
+eSCL/AirScan for Apple's Image Capture interface.
 
 Tested on an Apple silicon Mac running macOS 26.5.2 with Canon's G3000 CUPS
 driver 16.91.0.0. A physical scan initiated from Apple Image Capture was
@@ -49,8 +49,10 @@ verified on a Canon G3810 sold as part of the G3010 series.
 - a Canon PIXMA G3010 on the same local network;
 - Canon G3000 series CUPS Printer Driver 16.91.0.0 or a compatible newer
   release (printing only);
-- Docker Desktop, installed and running (scanning only);
 - administrator access when macOS requests it.
+
+Docker Desktop, USB, and the printer's administrator password are not
+required for scanning.
 
 Download the Canon dependency from the
 [official Canon support page](https://asia.canon/en/support/0101155813?model=PIXMA%20G3000).
@@ -66,7 +68,7 @@ The installer verifies that this file exists before changing the print queue:
 ### Install from a release package
 
 1. Install Canon's official G3000 CUPS driver.
-2. Download `Canon-G3010-macOS-Compat-1.2.0.pkg` from GitHub Releases.
+2. Download `Canon-G3010-macOS-Compat-1.3.0.pkg` from GitHub Releases.
 3. Open the package and follow the macOS installer.
 4. Print to `Canon G3010 series (Mac compatibility)`.
 
@@ -75,7 +77,7 @@ Terminal method instead of disabling Gatekeeper:
 
 ```sh
 sudo installer \
-  -pkg Canon-G3010-macOS-Compat-1.2.0.pkg \
+  -pkg Canon-G3010-macOS-Compat-1.3.0.pkg \
   -target /
 ```
 
@@ -105,8 +107,8 @@ signed-in user when it can discover the printer. From source, run this once:
 ```
 
 The IP address can be omitted when the installed print queue or DNS-SD service
-is available. The first start builds the local open-source runtime and can
-take several minutes.
+is available. When running from source, build the native runtime once with
+`make native`; release packages already contain it.
 
 Then:
 
@@ -126,7 +128,7 @@ After package installation, use
 
 ## Scan from the command line
 
-Start Docker Desktop, place a document on the flatbed, and run:
+Place a document on the flatbed and run:
 
 ```sh
 ./scanner/scan.sh --ip 192.168.1.50 --output scan.jpg
@@ -139,8 +141,7 @@ canon-g3010-scan --ip 192.168.1.50 --output scan.jpg
 ```
 
 The `--ip` option can be omitted when the address is available from the
-`Canon_G3010` print queue or DNS-SD. The first run builds the local scanner
-runtime from Debian's signed packages. More examples:
+`Canon_G3010` print queue or DNS-SD. More examples:
 
 ```sh
 # Detect the WSD scanner without moving the scan head
@@ -165,8 +166,7 @@ client.
 ```
 
 The uninstaller removes the `Canon_G3010` queue and this project's per-user
-scanner bridge. It does not remove Docker Desktop, local Docker images, or the
-official Canon dependency.
+scanner bridge. It does not remove the official Canon printing dependency.
 
 ## Diagnose
 
@@ -200,7 +200,7 @@ The scan path is independent:
 ```text
 canon-g3010-scan
       ↓
-sane-airscan / SANE inside the local container
+native sane-airscan / SANE
       ↓
 WSD Scan SOAP + HTTP, local network only
       ↓
@@ -214,7 +214,7 @@ For Image Capture, AirSane adds a standards adapter in front:
 ```text
 Apple Image Capture / macOS scan panel
       ↓  eSCL/AirScan over localhost
-AirSane bridge inside the local container
+native AirSane bridge
       ↓  SANE
 sane-airscan
       ↓  WSD Scan SOAP/HTTP
@@ -233,8 +233,13 @@ On macOS:
 
 ```sh
 make check
+make native
 make package
 ```
+
+Maintainer builds require Homebrew packages `cmake`, `sane-backends`,
+`gnutls`, `jpeg-turbo`, `libpng`, and `libtiff`. The resulting `.pkg` bundles
+the native runtime, so end users do not need Homebrew.
 
 Artifacts are written to `dist/`:
 
@@ -244,9 +249,8 @@ Artifacts are written to `dist/`:
 
 ## Known limitations
 
-- Docker Desktop is required for the portable scanner runtime.
-- The scanner is available while the Mac, Docker Desktop, printer, and local
-  network are running.
+- The scanner is available while the Mac, printer, and local network are
+  running.
 - The Bonjour record can be discovered on the local network, but its scanner
   endpoint is bound to this Mac's loopback address and is not remotely
   reachable.

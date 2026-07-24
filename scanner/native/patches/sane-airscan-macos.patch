@@ -1,0 +1,261 @@
+diff --git a/airscan-http.c b/airscan-http.c
+index 0c25e57..f73f32e 100644
+--- a/airscan-http.c
++++ b/airscan-http.c
+@@ -22,7 +22,6 @@
+ #include <sys/un.h>
+ #include <unistd.h>
+
+-#include <avahi-common/domain.h>
+ #include <gnutls/gnutls.h>
+
+ /******************** Constants ********************/
+@@ -919,20 +918,27 @@ bool
+ http_uri_host_is (const http_uri *uri, const char *host)
+ {
+     const char *uri_host = http_uri_get_host(uri);
++    size_t uri_len;
++    size_t host_len;
+
+     if (http_uri_host_is_literal(uri)) {
+         return !strcasecmp(uri_host, host);
+     }
+
+-    if (!avahi_is_valid_domain_name(uri_host)) {
++    if (uri_host == NULL || host == NULL || *uri_host == '\0' || *host == '\0') {
+         return false;
+     }
+
+-    if (!avahi_is_valid_domain_name(host)) {
+-        return false;
++    uri_len = strlen(uri_host);
++    host_len = strlen(host);
++    if (uri_len > 1 && uri_host[uri_len - 1] == '.') {
++        uri_len--;
++    }
++    if (host_len > 1 && host[host_len - 1] == '.') {
++        host_len--;
+     }
+
+-    return avahi_domain_equal(uri_host, host);
++    return uri_len == host_len && !strncasecmp(uri_host, host, uri_len);
+ }
+
+ /* http_uri_host_is_literal returns true if URI uses literal
+diff --git a/airscan-os.c b/airscan-os.c
+index 3c3db98..292727f 100644
+--- a/airscan-os.c
++++ b/airscan-os.c
+@@ -17,6 +17,10 @@
+ #include <unistd.h>
+ #include <sys/stat.h>
+
++#ifdef __APPLE__
++#   include <mach-o/dyld.h>
++#endif
++
+ #if defined(__OpenBSD__) || defined(__FreeBSD__)
+ #   include <sys/types.h>
+ #   include <sys/sysctl.h>
+@@ -101,6 +105,12 @@ os_progname_init (void)
+     if (rc < 0) {
+         os_progname_buf[0] = '\0'; /* Just a paranoia */
+     }
++#elif defined(__APPLE__)
++    uint32_t len = (uint32_t) sizeof(os_progname_buf);
++    if (_NSGetExecutablePath(os_progname_buf, &len) != 0) {
++        os_progname_buf[0] = '\0';
++        return;
++    }
+ #else
+     /* This is nice to have but not critical. The caller already has
+        to handle os_progname returning NULL. The error is left as a
+diff --git a/airscan-uuid.c b/airscan-uuid.c
+index d338c92..36d82e9 100644
+--- a/airscan-uuid.c
++++ b/airscan-uuid.c
+@@ -58,7 +58,7 @@ uuid_rand (void)
+  * Check the returned uuid with uuid_valid() for possible parse errors
+  */
+ uuid
+-uuid_parse (const char *in)
++airscan_uuid_parse (const char *in)
+ {
+     uint8_t       buf[16];
+     unsigned int  cnt = 0;
+diff --git a/airscan-wsdd.c b/airscan-wsdd.c
+index 0b4883e..05ffc97 100644
+--- a/airscan-wsdd.c
++++ b/airscan-wsdd.c
+@@ -264,7 +264,7 @@ wsdd_finding_new (int ifindex, const char *address)
+     wsdd_finding *wsdd = mem_new(wsdd_finding, 1);
+
+     wsdd->finding.method = ZEROCONF_WSD;
+-    wsdd->finding.uuid = uuid_parse(address);
++    wsdd->finding.uuid = airscan_uuid_parse(address);
+     if (!uuid_valid(wsdd->finding.uuid)) {
+         wsdd->finding.uuid = uuid_hash(address);
+     }
+diff --git a/airscan.c b/airscan.c
+index c77230a..b219130 100644
+--- a/airscan.c
++++ b/airscan.c
+@@ -8,6 +8,22 @@
+
+ #include "airscan.h"
+
++#ifdef __APPLE__
++#define sane_init                  airscan_sane_init_impl
++#define sane_exit                  airscan_sane_exit_impl
++#define sane_get_devices           airscan_sane_get_devices_impl
++#define sane_open                  airscan_sane_open_impl
++#define sane_close                 airscan_sane_close_impl
++#define sane_get_option_descriptor airscan_sane_get_option_descriptor_impl
++#define sane_control_option        airscan_sane_control_option_impl
++#define sane_get_parameters        airscan_sane_get_parameters_impl
++#define sane_start                 airscan_sane_start_impl
++#define sane_read                  airscan_sane_read_impl
++#define sane_cancel                airscan_sane_cancel_impl
++#define sane_set_io_mode           airscan_sane_set_io_mode_impl
++#define sane_get_select_fd         airscan_sane_get_select_fd_impl
++#endif
++
+ /* Static variables
+  */
+ static const SANE_Device **sane_device_list;
+@@ -396,6 +412,101 @@ sane_get_select_fd (SANE_Handle handle, SANE_Int *fd)
+ }
+
+ /******************** API aliases for libsane-dll ********************/
++#ifdef __APPLE__
++#undef sane_init
++#undef sane_exit
++#undef sane_get_devices
++#undef sane_open
++#undef sane_close
++#undef sane_get_option_descriptor
++#undef sane_control_option
++#undef sane_get_parameters
++#undef sane_start
++#undef sane_read
++#undef sane_cancel
++#undef sane_set_io_mode
++#undef sane_get_select_fd
++
++SANE_Status
++sane_airscan_init(SANE_Int *version_code, SANE_Auth_Callback authorize)
++{
++    return airscan_sane_init_impl(version_code, authorize);
++}
++
++void
++sane_airscan_exit(void)
++{
++    airscan_sane_exit_impl();
++}
++
++SANE_Status
++sane_airscan_get_devices(const SANE_Device ***device_list, SANE_Bool local_only)
++{
++    return airscan_sane_get_devices_impl(device_list, local_only);
++}
++
++SANE_Status
++sane_airscan_open(SANE_String_Const devicename, SANE_Handle *handle)
++{
++    return airscan_sane_open_impl(devicename, handle);
++}
++
++void
++sane_airscan_close(SANE_Handle handle)
++{
++    airscan_sane_close_impl(handle);
++}
++
++const SANE_Option_Descriptor*
++sane_airscan_get_option_descriptor(SANE_Handle handle, SANE_Int option)
++{
++    return airscan_sane_get_option_descriptor_impl(handle, option);
++}
++
++SANE_Status
++sane_airscan_control_option(SANE_Handle handle, SANE_Int option,
++    SANE_Action action, void *value, SANE_Int *info)
++{
++    return airscan_sane_control_option_impl(handle, option, action, value, info);
++}
++
++SANE_Status
++sane_airscan_get_parameters(SANE_Handle handle, SANE_Parameters *params)
++{
++    return airscan_sane_get_parameters_impl(handle, params);
++}
++
++SANE_Status
++sane_airscan_start(SANE_Handle handle)
++{
++    return airscan_sane_start_impl(handle);
++}
++
++SANE_Status
++sane_airscan_read(SANE_Handle handle, SANE_Byte *data,
++    SANE_Int max_length, SANE_Int *length)
++{
++    return airscan_sane_read_impl(handle, data, max_length, length);
++}
++
++void
++sane_airscan_cancel(SANE_Handle handle)
++{
++    airscan_sane_cancel_impl(handle);
++}
++
++SANE_Status
++sane_airscan_set_io_mode(SANE_Handle handle, SANE_Bool non_blocking)
++{
++    return airscan_sane_set_io_mode_impl(handle, non_blocking);
++}
++
++SANE_Status
++sane_airscan_get_select_fd(SANE_Handle handle, SANE_Int *fd)
++{
++    return airscan_sane_get_select_fd_impl(handle, fd);
++}
++#else
+ SANE_Status __attribute__ ((alias ("sane_init")))
+ sane_airscan_init (SANE_Int *version_code, SANE_Auth_Callback authorize);
+
+@@ -436,6 +547,7 @@ sane_airscan_set_io_mode (SANE_Handle handle, SANE_Bool non_blocking);
+
+ SANE_Status __attribute__ ((alias ("sane_get_select_fd")))
+ sane_airscan_get_select_fd (SANE_Handle handle, SANE_Int * fd);
++#endif
+
+ /* vim:ts=8:sw=4:et
+  */
+diff --git a/airscan.h b/airscan.h
+index 7001979..4dc1ca1 100644
+--- a/airscan.h
++++ b/airscan.h
+@@ -627,6 +627,12 @@ __ptr_array_del (void **a, int i)
+ #   endif
+ #endif
+
++#ifdef __APPLE__
++#   undef OS_HAVE_ENDIAN_H
++#   define OS_HAVE_AF_ROUTE             1
++#   define OS_HAVE_SYS_ENDIAN_H         1
++#endif
++
+ /* Get user's home directory. There is no need to
+  * free the returned string
+  *
+@@ -913,7 +919,7 @@ uuid_rand (void);
+  * Check the returned uuid with uuid_valid() for possible parse errors
+  */
+ uuid
+-uuid_parse (const char *in);
++airscan_uuid_parse (const char *in);
+
+ /* Generate uuid by cryptographically cacheing input string
+  */

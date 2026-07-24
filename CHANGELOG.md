@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0 - 2026-07-24
+
+- Replaced the Docker scanning runtime with native arm64/x86_64 macOS
+  executables and a self-contained dynamic-library bundle.
+- Ported the static WSD configuration path of `sane-airscan` to macOS and used
+  Apple's native DNS-SD utility to publish the AirSane eSCL bridge.
+- Added reproducible pinned-source builds and audited portability patches.
+- Changed Bonjour publication so Image Capture only sees the scanner after
+  the native eSCL engine is ready.
+- Migrates and removes the superseded private Docker bridge automatically.
+- Verified native WSD capability discovery and a physical 150 dpi color JPEG
+  scan without Docker, USB, a password, or a cloud service.
+
 ## 1.2.0 - 2026-07-24
 
 - Added a WSD/SANE-to-eSCL bridge for Apple Image Capture and compatible

@@ -13,6 +13,7 @@ package_path="${repo_root}/dist/${package_name}.pkg"
 archive_path="${repo_root}/dist/${package_name}-source.zip"
 checksum_path="${repo_root}/dist/SHA256SUMS"
 payload_root="$(/usr/bin/mktemp -d "/private/tmp/canon-g3010-pkgroot.XXXXXX")"
+native_runtime="${repo_root}/build/native-runtime"
 
 cleanup() {
   case "${payload_root}" in
@@ -25,10 +26,11 @@ trap cleanup EXIT INT TERM
 
 /bin/rm -f "${package_path}" "${archive_path}" "${checksum_path}"
 
+"${repo_root}/scanner/native/build-native.sh"
+
 /bin/mkdir -p \
   "${payload_root}/usr/local/bin" \
-  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner" \
-  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-bridge"
+  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-native"
 
 /bin/cp -X \
   "${repo_root}/src/install.sh" \
@@ -43,30 +45,26 @@ trap cleanup EXIT INT TERM
   "${payload_root}/usr/local/bin/canon-g3010-scan"
 
 /bin/cp -X \
-  "${repo_root}/scanner/Dockerfile" \
-  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner/Dockerfile"
-
-/bin/cp -X \
   "${repo_root}/scanner/bridge/bridge.sh" \
   "${payload_root}/usr/local/bin/canon-g3010-scanner-bridge"
 
-/bin/cp -X \
-  "${repo_root}/scanner/bridge/Dockerfile" \
-  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-bridge/Dockerfile"
-
-/bin/cp -X \
-  "${repo_root}/scanner/bridge/entrypoint.sh" \
-  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-bridge/entrypoint.sh"
+/bin/cp -R -X \
+  "${native_runtime}/." \
+  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-native/"
 
 /bin/chmod 0755 \
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/install.sh" \
   "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/uninstall.sh" \
   "${payload_root}/usr/local/bin/canon-g3010-scan" \
   "${payload_root}/usr/local/bin/canon-g3010-scanner-bridge" \
-  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-bridge/entrypoint.sh" \
+  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-native/bin/airsaned" \
+  "${payload_root}/usr/local/libexec/canon-g3010-macos-compat/scanner-native/bin/scanimage" \
   "${repo_root}/package/scripts/preinstall" \
   "${repo_root}/package/scripts/postinstall"
 
+# Homebrew bottles can be installed read-only. The package staging copy must
+# be writable so macOS can remove provenance metadata before pkgbuild.
+/bin/chmod -R u+w "${payload_root}"
 /usr/bin/xattr -cr "${payload_root}"
 
 /usr/bin/pkgbuild \

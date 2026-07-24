@@ -96,7 +96,7 @@ or cloud service participates in this path.
 Apple Image Capture / macOS scan panel
     │  eSCL/AirScan
     ▼
-AirSane in a local Docker Desktop container
+native macOS AirSane process
     │  SANE API
     ▼
 sane-airscan WSD backend
@@ -108,14 +108,13 @@ G3010 /wsd/scanservice.cgi
 JPEG/PNG/PDF returned to the macOS application
 ```
 
-The optional CLI path enters the same container at `scanimage` and writes
-JPEG, PNG, or TIFF directly to a selected Mac directory.
+The optional CLI path uses the bundled native `scanimage` and writes JPEG,
+PNG, or TIFF directly to a selected Mac path.
 
-The container provides a reproducible runtime without modifying macOS system
-frameworks or installing an unsigned ICA bundle. For the GUI bridge, it mounts
-only generated configuration files. The CLI additionally mounts only the
-selected output directory. Neither path exposes the rest of the Mac filesystem
-to the scanner runtime.
+Pinned upstream revisions and the included portability patches provide a
+reproducible native runtime without modifying macOS system frameworks or
+installing an unsigned ICA bundle. The bridge listens only on the loopback
+interface and reads only its generated configuration.
 
 The physical device reported and successfully used these capabilities:
 
@@ -137,8 +136,8 @@ hostname can also be passed explicitly with `--host`.
 
 For scanning, the wrapper first tries the installed CUPS queue, then the same
 DNS-SD service. `--ip` bypasses discovery. A generated `sane-airscan`
-configuration points directly to the device's WSD scanner endpoint, which
-avoids relying on multicast discovery through Docker Desktop's network layer.
+configuration points directly to the device's WSD scanner endpoint, avoiding
+multicast discovery and keeping the runtime deterministic.
 
 The GUI bridge publishes `Canon G3010 Scanner._uscan._tcp.local.` from the Mac
 with `rs=eSCL`, using the dedicated proxy host
@@ -169,7 +168,7 @@ The scanner defaults to A4, 300 dpi, color, and JPEG.
 - No document data is sent to this project or to a cloud service.
 - Print jobs and scans are transmitted directly between the Mac and printer.
 - The printer's web administrator password is not used or stored.
-- The scan container can write only to the chosen output directory.
+- The CLI writes only to the output path selected by the user.
 - The GUI eSCL port is bound to `127.0.0.1`; other LAN devices cannot connect
   to it even though they may see the Bonjour record.
 - The scripts do not collect telemetry.

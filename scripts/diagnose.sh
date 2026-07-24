@@ -44,22 +44,19 @@ section "Visible printer services"
   print -- "No matching service was reported by lpinfo."
 
 section "WSD/SANE scanner runtime"
-if command -v docker >/dev/null 2>&1; then
-  print -- "Docker command: $(command -v docker)"
-  if docker info >/dev/null 2>&1; then
-    print -- "Docker Desktop: running"
-    if docker image inspect \
-      "canon-g3010-macos-compat-scanner:1.2.0" >/dev/null 2>&1; then
-      print -- "Scanner image: installed"
-    else
-      print -- "Scanner image: not built yet"
-    fi
-  else
-    print -- "Docker Desktop: not running or not accessible"
-  fi
+support_runtime="${HOME}/Library/Application Support/Canon G3010 macOS Compat/scanner-native"
+system_runtime="/usr/local/libexec/canon-g3010-macos-compat/scanner-native"
+source_runtime="./build/native-runtime"
+if [[ -x "${support_runtime}/bin/scanimage" ]]; then
+  print -- "Native runtime: ${support_runtime}"
+elif [[ -x "${system_runtime}/bin/scanimage" ]]; then
+  print -- "Native runtime: ${system_runtime}"
+elif [[ -x "${source_runtime}/bin/scanimage" ]]; then
+  print -- "Native runtime: ${source_runtime}"
 else
-  print -- "Docker Desktop: not installed"
+  print -- "Native runtime: not built or installed"
 fi
+print -- "Docker Desktop: not required"
 print -- "Scanner test: ./scanner/scan.sh --ip ADDRESS --list"
 
 section "macOS Image Capture bridge"
