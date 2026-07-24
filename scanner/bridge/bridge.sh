@@ -252,6 +252,34 @@ resolve_current_ip() {
   return 1
 }
 
+resolve_monitored_ip() {
+  local resolved=""
+
+  # A scanner can legitimately stop answering WSD status probes while its
+  # carriage is moving. Address monitoring must therefore use Bonjour name
+  # resolution only; probing WSD here can misclassify "busy" as "offline" and
+  # restart the bridge in the middle of an Image Capture job.
+  if [[ -n "${printer_host}" ]]; then
+    resolved="$(resolve_ipv4 "${printer_host}")"
+    if validate_ipv4 "${resolved}"; then
+      print -r -- "${resolved}"
+      return 0
+    fi
+  fi
+
+  printer_ip=""
+  if discover_dnssd_record; then
+    print -r -- "${printer_ip}"
+    return 0
+  fi
+
+  if validate_ipv4 "${preferred_ip}"; then
+    print -r -- "${preferred_ip}"
+    return 0
+  fi
+  return 1
+}
+
 select_runtime() {
   local candidate
   for candidate in \
@@ -435,7 +463,7 @@ run_session() {
     /bin/kill -0 "${engine_pid}" 2>/dev/null || return 1
     /bin/kill -0 "${bonjour_pid}" 2>/dev/null || return 1
 
-    candidate="$(resolve_current_ip 2>/dev/null || true)"
+    candidate="$(resolve_monitored_ip 2>/dev/null || true)"
     if validate_ipv4 "${candidate}"; then
       failures=0
       if [[ "${candidate}" != "${printer_ip}" ]]; then

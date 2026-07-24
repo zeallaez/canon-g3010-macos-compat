@@ -12,6 +12,10 @@
 - Added a persistent Bonjour hostname and last-known address configuration.
 - Added background address monitoring and automatic bridge restart when DHCP
   changes the printer's IP address.
+- Corrected the advertised 216 x 297 mm platen boundary so Apple Image Capture
+  exposes the full A4 preset instead of defaulting to JIS B5.
+- Prevented the address monitor from treating a scanner that is busy moving
+  the carriage as offline and restarting the bridge during a scan.
 - Kept the ability to run an installed 1.3.x AirSane runtime as a migration
   fallback, while 1.4.0 packages use the direct bridge.
 - Verified an Image Capture overview and a physical 150 dpi color JPEG scan

@@ -39,8 +39,13 @@
 namespace {
 
 constexpr int kMaxRequestBytes = 1024 * 1024;
-constexpr int kMaxWidth300 = 2550;
-constexpr int kMaxHeight300 = 3504;
+// Canon documents the platen as 216 x 297 mm. eSCL expresses these values in
+// three-hundredths of an inch; rounding the height down hides the A4 preset in
+// Image Capture, so use the nearest whole protocol units.
+constexpr int kMaxWidth300 = 2551;
+constexpr int kMaxHeight300 = 3508;
+constexpr double kPlatenWidthMm = 216.0;
+constexpr double kPlatenHeightMm = 297.0;
 
 struct Options {
   int port = 8090;
@@ -60,8 +65,8 @@ struct Job {
   int resolution = 300;
   double left_mm = 0;
   double top_mm = 0;
-  double width_mm = 215.9;
-  double height_mm = 296.672;
+  double width_mm = kPlatenWidthMm;
+  double height_mm = kPlatenHeightMm;
   std::atomic<JobState> state{JobState::pending};
   std::atomic<pid_t> child_pid{-1};
   std::atomic<int> images_completed{0};
@@ -486,9 +491,10 @@ std::shared_ptr<Job> create_job(const std::string &ticket) {
       xml_number(ticket, "Width", kMaxWidth300) * unit_to_mm;
   job->height_mm =
       xml_number(ticket, "Height", kMaxHeight300) * unit_to_mm;
-  job->width_mm = std::clamp(job->width_mm, 1.0, 215.9 - job->left_mm);
+  job->width_mm =
+      std::clamp(job->width_mm, 1.0, kPlatenWidthMm - job->left_mm);
   job->height_mm =
-      std::clamp(job->height_mm, 1.0, 296.672 - job->top_mm);
+      std::clamp(job->height_mm, 1.0, kPlatenHeightMm - job->top_mm);
 
   std::lock_guard<std::mutex> lock(g_jobs_mutex);
   g_jobs[job->id] = job;
