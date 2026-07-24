@@ -43,6 +43,10 @@ verified on a Canon G3810 sold as part of the G3010 series.
   administrator password.
 - Installs a per-user launch agent that restores the scanner bridge after
   login.
+- Serializes physical scan jobs, retries transient failures, times out stuck
+  jobs, and supports reliable cancellation.
+- Keeps scanner working files private, rotates local logs, removes superseded
+  Docker/AirSane files during upgrades, and disables CUPS queue sharing.
 - Builds an installable macOS `.pkg` containing both print and scan wrappers.
 
 ## Requirements
@@ -127,6 +131,19 @@ Check the bridge without moving the scanner head:
 
 After package installation, use
 `canon-g3010-scanner-bridge status` instead.
+
+For a fuller health check, or to rebuild the local configuration and service:
+
+```sh
+./scanner/bridge/bridge.sh doctor
+./scanner/bridge/bridge.sh doctor --repair
+```
+
+The repair action preserves the printer identity, removes obsolete private
+Docker/AirSane bridge files, rotates oversized logs, recreates the LaunchAgent
+and scanner configuration, disables CUPS queue sharing, and verifies that both
+the printer WSD endpoint and local eSCL endpoint are reachable. Installed
+packages provide the same commands through `canon-g3010-scanner-bridge`.
 
 ## Scan from the command line
 

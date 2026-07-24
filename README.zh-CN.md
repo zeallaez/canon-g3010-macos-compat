@@ -41,6 +41,9 @@ WSD 扫描链路，因此可以显示在 Apple“图像捕捉”和兼容的 mac
   图形界面或命令行 JPEG/PNG/TIFF/PDF 输出；
 - 扫描不需要打印机网页管理员密码；
 - 安装用户级登录启动项，登录后自动恢复扫描桥接；
+- 物理扫描任务自动排队，临时故障自动重试，卡住的任务会超时，并支持可靠取消；
+- 扫描临时文件仅当前用户可读，日志自动轮换；升级时清除旧 Docker/AirSane
+  文件，并关闭 CUPS 打印队列共享；
 - 可构建成同时包含打印和扫描命令的 macOS `.pkg` 安装包。
 
 ## 环境要求
@@ -124,6 +127,18 @@ Release 安装包会在能够发现打印机时，为当前登录用户自动安
 
 使用安装包后，对应命令是
 `canon-g3010-scanner-bridge status`。
+
+需要完整检查或自动重建本机配置与服务时，运行：
+
+```sh
+./scanner/bridge/bridge.sh doctor
+./scanner/bridge/bridge.sh doctor --repair
+```
+
+修复命令会保留打印机身份，清理旧的私有 Docker/AirSane 桥接文件，轮换过大的
+日志，重建 LaunchAgent 和扫描配置，关闭 CUPS 打印队列共享，并确认打印机
+WSD 端点和本机 eSCL 端点都可访问。使用安装包后，把脚本路径换成
+`canon-g3010-scanner-bridge` 即可。
 
 ## 在命令行中扫描
 

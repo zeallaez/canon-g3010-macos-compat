@@ -11,6 +11,8 @@ readonly FALLBACK_UUID="7f2e31cb-c289-5757-b366-dde86d548b49"
 readonly DEFAULT_QUEUE="Canon_G3010"
 readonly DEFAULT_PRINTER_SERVICE="Canon G3010 series"
 readonly LEGACY_CONTAINER="canon-g3010-airscan-bridge"
+readonly LOG_MAX_BYTES="1048576"
+readonly LOG_KEEP="3"
 
 script_path="${0:A}"
 script_dir="${script_path:h}"
@@ -35,6 +37,7 @@ engine_pid=""
 bonjour_pid=""
 shutting_down="no"
 engine_kind="unknown"
+repair_requested="no"
 
 usage() {
   cat <<'EOF'
@@ -48,12 +51,14 @@ Commands:
   start       Start an already installed bridge.
   stop        Stop the bridge.
   status      Show identity, address, launch agent, and eSCL status.
+  doctor      Check runtime, queue, stale files, logs, and network state.
   uninstall   Remove the bridge and its private files.
   run         Run the auto-reconnecting supervisor (used by launchd).
 
 Options:
   --ip ADDRESS  Initial/fallback printer IPv4 address. The bridge still tracks
                 the printer's stable Bonjour hostname when it is available.
+  --repair      With doctor, clean stale files and rebuild the local service.
 
 The scanner uses the printer's real Bonjour UUID, so macOS can associate
 printing and scanning with the same multifunction device. Docker is not used.
@@ -307,10 +312,11 @@ check_runtime() {
 }
 
 write_runtime_config() {
+  local runtime="${1:-}"
   local sane_dir="${support_dir}/config/sane.d"
   local airsane_dir="${support_dir}/config/airsane"
 
-  /bin/mkdir -p "${sane_dir}" "${airsane_dir}" "${log_dir}"
+  /bin/mkdir -p "${sane_dir}" "${log_dir}"
   umask 077
 
   {
@@ -327,18 +333,24 @@ write_runtime_config() {
     print -- "model = hardware"
   } >"${sane_dir}/airscan.conf"
 
-  {
-    print -- "allow 127.0.0.1"
-    print -- "allow ::1"
-  } >"${airsane_dir}/access.conf"
+  if [[ -n "${runtime}" &&
+        -x "${runtime}/bin/canon-g3010-escl-bridge" ]]; then
+    /bin/rm -rf "${airsane_dir}"
+  else
+    /bin/mkdir -p "${airsane_dir}"
+    {
+      print -- "allow 127.0.0.1"
+      print -- "allow ::1"
+    } >"${airsane_dir}/access.conf"
 
-  {
-    print -- "# Keep the configured airscan backend enabled."
-  } >"${airsane_dir}/ignore.conf"
+    {
+      print -- "# Keep the configured airscan backend enabled."
+    } >"${airsane_dir}/ignore.conf"
 
-  {
-    print -- "location Local Mac bridge"
-  } >"${airsane_dir}/options.conf"
+    {
+      print -- "location Local Mac bridge"
+    } >"${airsane_dir}/options.conf"
+  fi
 }
 
 cleanup_legacy_container() {
@@ -355,6 +367,90 @@ cleanup_legacy_container() {
     "${docker_bin}" container rm --force "${LEGACY_CONTAINER}" >/dev/null ||
       true
   fi
+}
+
+cleanup_legacy_files() {
+  /bin/rm -f \
+    "${support_dir}/scanner-bridge/Dockerfile" \
+    "${support_dir}/scanner-bridge/entrypoint.sh" \
+    "${support_dir}/config/access.conf" \
+    "${support_dir}/config/airscan.conf" \
+    "${support_dir}/config/ignore.conf"
+
+  if [[ -x "${installed_runtime}/bin/canon-g3010-escl-bridge" ]]; then
+    /bin/rm -f "${installed_runtime}/bin/airsaned"
+    /bin/rm -rf \
+      "${installed_runtime}/licenses/AirSane" \
+      "${support_dir}/config/airsane"
+  fi
+}
+
+rotate_log_file() {
+  local path="$1"
+  local size index
+  if [[ ! -f "${path}" ]]; then
+    /usr/bin/touch "${path}"
+  fi
+  /bin/chmod 0600 "${path}"
+  size="$(/usr/bin/stat -f '%z' "${path}" 2>/dev/null || print 0)"
+  [[ "${size}" == <-> ]] || size=0
+  (( size >= LOG_MAX_BYTES )) || return 0
+
+  /bin/rm -f "${path}.${LOG_KEEP}"
+  for (( index = LOG_KEEP - 1; index >= 1; index-- )); do
+    [[ ! -f "${path}.${index}" ]] ||
+      /bin/mv -f "${path}.${index}" "${path}.$(( index + 1 ))"
+  done
+  /bin/mv -f "${path}" "${path}.1"
+  /usr/bin/touch "${path}"
+  /bin/chmod 0600 "${path}"
+}
+
+rotate_logs() {
+  local include_launch_logs="${1:-no}"
+  /bin/mkdir -p "${log_dir}"
+  rotate_log_file "${log_dir}/native-engine.log"
+  if [[ "${include_launch_logs}" == "yes" ]]; then
+    rotate_log_file "${log_dir}/bridge.log"
+    rotate_log_file "${log_dir}/bridge-error.log"
+  fi
+}
+
+disable_queue_sharing() {
+  /usr/bin/lpstat -p "${DEFAULT_QUEUE}" >/dev/null 2>&1 || return 0
+  /usr/sbin/lpadmin \
+    -p "${DEFAULT_QUEUE}" \
+    -o printer-is-shared=false >/dev/null 2>&1
+}
+
+queue_sharing_enabled() {
+  /usr/bin/lpoptions -p "${DEFAULT_QUEUE}" 2>/dev/null |
+    /usr/bin/tr ' ' '\n' |
+    /usr/bin/grep -qx 'printer-is-shared=true'
+}
+
+legacy_files_present() {
+  [[ -e "${support_dir}/scanner-bridge/Dockerfile" ||
+     -e "${support_dir}/scanner-bridge/entrypoint.sh" ||
+     -e "${support_dir}/config/access.conf" ||
+     -e "${support_dir}/config/airscan.conf" ||
+     -e "${support_dir}/config/ignore.conf" ||
+     -e "${support_dir}/config/airsane" ||
+     -e "${installed_runtime}/bin/airsaned" ||
+     -e "${installed_runtime}/licenses/AirSane" ]]
+}
+
+wait_for_installed_endpoint() {
+  local i
+  for i in {1..60}; do
+    if /usr/bin/curl --fail --silent --max-time 2 \
+      "http://127.0.0.1:${SERVICE_PORT}/eSCL/ScannerCapabilities" \
+      >/dev/null; then
+      return 0
+    fi
+    /bin/sleep 1
+  done
+  return 1
 }
 
 stop_children() {
@@ -447,7 +543,8 @@ run_session() {
   local runtime="$1"
   local candidate failures=0
 
-  write_runtime_config
+  write_runtime_config "${runtime}"
+  rotate_logs
   start_engine "${runtime}"
   info "Starting ${engine_kind} bridge for ${printer_ip}"
   if ! wait_until_ready; then
@@ -572,6 +669,7 @@ install_bridge() {
   /bin/launchctl bootout "gui/$(/usr/bin/id -u)" "${plist_path}" \
     >/dev/null 2>&1 || true
   cleanup_legacy_container
+  rotate_logs yes
 
   info "Installing native runtime ${BRIDGE_VERSION}"
   /bin/mkdir -p "${installed_bridge:h}"
@@ -587,20 +685,16 @@ install_bridge() {
   [[ ! -f "${installed_runtime}/bin/airsaned" ]] ||
     /bin/chmod 0755 "${installed_runtime}/bin/airsaned"
 
+  cleanup_legacy_files
   write_settings
-  write_runtime_config
+  write_runtime_config "${installed_runtime}"
   write_launch_agent
+  if ! disable_queue_sharing; then
+    info "Warning: could not disable CUPS queue sharing; run doctor --repair as an administrator"
+  fi
   /bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "${plist_path}"
 
-  for _ in {1..60}; do
-    /usr/bin/curl --fail --silent --max-time 2 \
-      "http://127.0.0.1:${SERVICE_PORT}/eSCL/ScannerCapabilities" \
-      >/dev/null && break
-    /bin/sleep 1
-  done
-  /usr/bin/curl --fail --silent --max-time 3 \
-    "http://127.0.0.1:${SERVICE_PORT}/eSCL/ScannerCapabilities" \
-    >/dev/null ||
+  wait_for_installed_endpoint ||
     fail "the installed native bridge did not become ready"
 
   info "Multifunction identity: ${printer_uuid}"
@@ -662,6 +756,136 @@ status_bridge() {
   print -- "Endpoint: http://127.0.0.1:${SERVICE_PORT}/eSCL"
 }
 
+repair_bridge() {
+  local runtime
+
+  runtime="$(select_runtime 2>/dev/null || true)"
+  [[ -n "${runtime}" ]] || fail "native runtime is missing; reinstall the package"
+  check_runtime "${runtime}"
+
+  load_settings
+  printer_ip="${cli_printer_ip:-${preferred_ip}}"
+  refresh_identity ||
+    fail "printer discovery failed; rerun doctor --repair with --ip ADDRESS"
+  preferred_ip="${printer_ip}"
+  probe_wsd "${printer_ip}" ||
+    fail "the WSD scanner is not reachable at ${printer_ip}"
+
+  info "Stopping the bridge before repair"
+  /bin/launchctl bootout "gui/$(/usr/bin/id -u)" "${plist_path}" \
+    >/dev/null 2>&1 || true
+  cleanup_legacy_container
+  rotate_logs yes
+
+  /bin/mkdir -p "${installed_bridge:h}"
+  if [[ "${runtime}" != "${installed_runtime}" ]]; then
+    /bin/rm -rf "${installed_runtime}"
+    /bin/cp -R -X "${runtime}" "${installed_runtime}"
+  fi
+  if [[ "${script_path}" != "${installed_bridge}" ]]; then
+    /bin/cp -X "${script_path}" "${installed_bridge}"
+  fi
+  /bin/chmod 0755 \
+    "${installed_bridge}" \
+    "${installed_runtime}/bin/scanimage" \
+    "${installed_runtime}/bin/canon-g3010-escl-bridge"
+
+  cleanup_legacy_files
+  write_settings
+  write_runtime_config "${installed_runtime}"
+  write_launch_agent
+  if ! disable_queue_sharing; then
+    info "Warning: could not disable CUPS queue sharing"
+  fi
+
+  /bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "${plist_path}"
+  wait_for_installed_endpoint ||
+    fail "the repaired native bridge did not become ready"
+  info "Repair complete"
+}
+
+doctor_bridge() {
+  local current_ip=""
+  local runtime=""
+  local problems=0
+  local log_path size
+
+  if [[ "${repair_requested}" == "yes" ]]; then
+    repair_bridge
+    print -- ""
+  fi
+
+  load_settings
+  current_ip="$(resolve_current_ip 2>/dev/null || true)"
+  runtime="$(select_runtime 2>/dev/null || true)"
+
+  print -- "Canon G3010 scanner bridge doctor"
+  print -- "---------------------------------"
+
+  if [[ -x "${runtime}/bin/canon-g3010-escl-bridge" ]]; then
+    print -- "[OK] Direct native WSD-to-eSCL runtime"
+  else
+    print -- "[FAIL] Direct native runtime is missing"
+    (( problems += 1 ))
+  fi
+
+  if /bin/launchctl print "gui/$(/usr/bin/id -u)/${LABEL}" \
+    >/dev/null 2>&1; then
+    print -- "[OK] LaunchAgent is running"
+  else
+    print -- "[FAIL] LaunchAgent is stopped"
+    (( problems += 1 ))
+  fi
+
+  if /usr/bin/curl --fail --silent --max-time 2 \
+    "http://127.0.0.1:${SERVICE_PORT}/eSCL/ScannerStatus" \
+    >/dev/null; then
+    print -- "[OK] Local eSCL endpoint is ready"
+  else
+    print -- "[FAIL] Local eSCL endpoint is unreachable"
+    (( problems += 1 ))
+  fi
+
+  if validate_ipv4 "${current_ip}" && probe_wsd "${current_ip}"; then
+    print -- "[OK] Printer WSD scanner is reachable at ${current_ip}"
+  else
+    print -- "[FAIL] Printer WSD scanner is unreachable"
+    (( problems += 1 ))
+  fi
+
+  if legacy_files_present; then
+    print -- "[WARN] Superseded Docker/AirSane files are still installed"
+    (( problems += 1 ))
+  else
+    print -- "[OK] No superseded Docker/AirSane files"
+  fi
+
+  if /usr/bin/lpstat -p "${DEFAULT_QUEUE}" >/dev/null 2>&1; then
+    if queue_sharing_enabled; then
+      print -- "[WARN] CUPS queue sharing is enabled"
+      (( problems += 1 ))
+    else
+      print -- "[OK] CUPS queue sharing is disabled"
+    fi
+  else
+    print -- "[INFO] Compatibility print queue is not installed"
+  fi
+
+  for log_path in \
+    "${log_dir}/native-engine.log" \
+    "${log_dir}/bridge.log" \
+    "${log_dir}/bridge-error.log"; do
+    size="$(/usr/bin/stat -f '%z' "${log_path}" 2>/dev/null || print 0)"
+    print -- "[INFO] ${log_path:t}: ${size} bytes (rotates at ${LOG_MAX_BYTES})"
+  done
+
+  if (( problems == 0 )); then
+    print -- "Result: healthy"
+  else
+    print -- "Result: ${problems} issue(s); run doctor --repair"
+  fi
+}
+
 uninstall_bridge() {
   stop_bridge
   /bin/rm -f "${plist_path}"
@@ -684,6 +908,10 @@ while (( $# > 0 )); do
       cli_printer_ip="$2"
       shift 2
       ;;
+    --repair)
+      repair_requested="yes"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -698,6 +926,9 @@ if [[ -n "${cli_printer_ip}" ]]; then
   validate_ipv4 "${cli_printer_ip}" ||
     fail "invalid IPv4 address: ${cli_printer_ip}"
 fi
+if [[ "${repair_requested}" == "yes" && "${action}" != "doctor" ]]; then
+  fail "--repair is only valid with doctor"
+fi
 
 case "${action}" in
   install)
@@ -711,6 +942,9 @@ case "${action}" in
     ;;
   status)
     status_bridge
+    ;;
+  doctor)
+    doctor_bridge
     ;;
   uninstall)
     uninstall_bridge

@@ -39,6 +39,9 @@
 namespace {
 
 constexpr int kMaxRequestBytes = 1024 * 1024;
+constexpr int kMaxScanAttempts = 3;
+constexpr auto kScanAttemptTimeout = std::chrono::minutes(5);
+constexpr auto kChildStopGrace = std::chrono::seconds(2);
 // Canon documents the platen as 216 x 297 mm. eSCL expresses these values in
 // three-hundredths of an inch; rounding the height down hides the A4 preset in
 // Image Capture, so use the nearest whole protocol units.
@@ -70,6 +73,7 @@ struct Job {
   std::atomic<JobState> state{JobState::pending};
   std::atomic<pid_t> child_pid{-1};
   std::atomic<int> images_completed{0};
+  std::mutex mutex;
   std::string reason = "JobQueued";
   std::chrono::steady_clock::time_point created =
       std::chrono::steady_clock::now();
@@ -79,6 +83,7 @@ Options g_options;
 std::atomic<bool> g_running{true};
 std::atomic<int> g_listen_fd{-1};
 std::mutex g_jobs_mutex;
+std::mutex g_scanner_mutex;
 std::map<std::string, std::shared_ptr<Job>> g_jobs;
 
 std::string trim(std::string value) {
@@ -421,6 +426,18 @@ std::string job_state_text(JobState state) {
   return "Aborted";
 }
 
+void update_job(const std::shared_ptr<Job> &job, JobState state,
+                const std::string &reason) {
+  std::lock_guard<std::mutex> lock(job->mutex);
+  job->reason = reason;
+  job->state = state;
+}
+
+std::string job_reason(const std::shared_ptr<Job> &job) {
+  std::lock_guard<std::mutex> lock(job->mutex);
+  return job->reason;
+}
+
 std::string scanner_status_xml() {
   std::ostringstream xml;
   bool processing = false;
@@ -453,7 +470,7 @@ std::string scanner_status_xml() {
         << "</pwg:Age><pwg:JobState>" << job_state_text(job->state)
         << "</pwg:JobState><pwg:ImagesCompleted>" << job->images_completed
         << "</pwg:ImagesCompleted><pwg:JobStateReasons>"
-        << "<pwg:JobStateReason>" << xml_escape(job->reason)
+        << "<pwg:JobStateReason>" << xml_escape(job_reason(job))
         << "</pwg:JobStateReason></pwg:JobStateReasons></scan:JobInfo>\r\n";
   }
   xml << "</scan:Jobs></scan:ScannerStatus>\r\n";
@@ -510,12 +527,73 @@ std::shared_ptr<Job> find_job(const std::string &id) {
   return found == g_jobs.end() ? nullptr : found->second;
 }
 
+void terminate_and_reap(pid_t child, int &status) {
+  kill(child, SIGTERM);
+  const auto deadline = std::chrono::steady_clock::now() + kChildStopGrace;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const pid_t result = waitpid(child, &status, WNOHANG);
+    if (result == child || (result < 0 && errno == ECHILD)) {
+      return;
+    }
+    if (result < 0 && errno != EINTR) {
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
+  kill(child, SIGKILL);
+  while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+  }
+}
+
+bool wait_for_scan_child(const std::shared_ptr<Job> &job, pid_t child,
+                         int &status, bool &timed_out) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + kScanAttemptTimeout;
+  while (true) {
+    const pid_t result = waitpid(child, &status, WNOHANG);
+    if (result == child) {
+      job->child_pid = -1;
+      return true;
+    }
+    if (result < 0 && errno != EINTR) {
+      job->child_pid = -1;
+      return false;
+    }
+    if (job->state == JobState::canceled) {
+      terminate_and_reap(child, status);
+      job->child_pid = -1;
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      timed_out = true;
+      terminate_and_reap(child, status);
+      job->child_pid = -1;
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+}
+
+bool wait_before_retry(const std::shared_ptr<Job> &job, int attempt) {
+  const int ticks = attempt * 20;
+  for (int tick = 0; tick < ticks; ++tick) {
+    if (job->state == JobState::canceled) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  return true;
+}
+
 bool run_scan(const std::shared_ptr<Job> &job, std::string &output_path) {
+  // The physical flatbed accepts one job at a time. Additional Image Capture
+  // requests remain Pending until the active job releases this lock.
+  std::unique_lock<std::mutex> scanner_lock(g_scanner_mutex);
   if (job->state != JobState::pending) {
     return false;
   }
-  job->state = JobState::processing;
-  job->reason = "JobScanning";
+  update_job(job, JobState::processing, "JobScanning");
 
   const std::string extension =
       job->document_format == "image/png" ? "png" : "jpg";
@@ -545,54 +623,77 @@ bool run_scan(const std::shared_ptr<Job> &job, std::string &output_path) {
       output_path,
   };
 
-  const pid_t child = fork();
-  if (child == 0) {
-    setenv("SANE_CONFIG_DIR", g_options.config_dir.c_str(), 1);
-    const std::string backend_dir = g_options.runtime_dir + "/lib/sane";
-    setenv("LD_LIBRARY_PATH", backend_dir.c_str(), 1);
-    setenv("DYLD_LIBRARY_PATH", backend_dir.c_str(), 1);
-    std::vector<char *> argv;
-    for (auto &argument : arguments) {
-      argv.push_back(argument.data());
-    }
-    argv.push_back(nullptr);
-    execv(scanimage.c_str(), argv.data());
-    _exit(127);
-  }
-  if (child < 0) {
-    job->state = JobState::aborted;
-    job->reason = "ResourcesAreNotReady";
-    return false;
-  }
-
-  job->child_pid = child;
-  int status = 0;
-  while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
-  }
-  job->child_pid = -1;
-
-  struct stat output {};
-  const bool success =
-      WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
-      stat(output_path.c_str(), &output) == 0 && output.st_size > 0;
-  if (!success) {
-    if (job->state != JobState::canceled) {
-      job->state = JobState::aborted;
-      job->reason = "ErrorsDetected";
+  for (int attempt = 1; attempt <= kMaxScanAttempts; ++attempt) {
+    if (job->state == JobState::canceled) {
+      unlink(output_path.c_str());
+      return false;
     }
     unlink(output_path.c_str());
-    std::cerr << "scan job " << job->id << " failed with wait status "
-              << status << "\n";
-    return false;
+    update_job(job, JobState::processing,
+               attempt == 1 ? "JobScanning" : "JobRetrying");
+
+    const pid_t child = fork();
+    if (child == 0) {
+      setenv("SANE_CONFIG_DIR", g_options.config_dir.c_str(), 1);
+      const std::string backend_dir = g_options.runtime_dir + "/lib/sane";
+      setenv("LD_LIBRARY_PATH", backend_dir.c_str(), 1);
+      setenv("DYLD_LIBRARY_PATH", backend_dir.c_str(), 1);
+      std::vector<char *> argv;
+      for (auto &argument : arguments) {
+        argv.push_back(argument.data());
+      }
+      argv.push_back(nullptr);
+      execv(scanimage.c_str(), argv.data());
+      _exit(127);
+    }
+
+    int status = 0;
+    bool timed_out = false;
+    bool reaped = false;
+    if (child >= 0) {
+      job->child_pid = child;
+      reaped = wait_for_scan_child(job, child, status, timed_out);
+    }
+
+    struct stat output {};
+    const bool success =
+        reaped && WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+        stat(output_path.c_str(), &output) == 0 && output.st_size > 0;
+    if (success) {
+      chmod(output_path.c_str(), S_IRUSR | S_IWUSR);
+      std::clog << "scan job " << job->id << " completed on attempt "
+                << attempt << "\n";
+      return true;
+    }
+
+    unlink(output_path.c_str());
+    if (job->state == JobState::canceled) {
+      return false;
+    }
+    if (timed_out) {
+      update_job(job, JobState::aborted, "JobTimedOut");
+      std::cerr << "scan job " << job->id << " timed out\n";
+      return false;
+    }
+
+    std::cerr << "scan job " << job->id << " attempt " << attempt
+              << " failed with wait status " << status << "\n";
+    if (attempt < kMaxScanAttempts) {
+      std::clog << "retrying scan job " << job->id << " after "
+                << attempt * 2 << " seconds\n";
+      if (!wait_before_retry(job, attempt)) {
+        return false;
+      }
+    }
   }
-  std::clog << "scan job " << job->id << " completed\n";
-  return true;
+
+  update_job(job, JobState::aborted, "ErrorsDetected");
+  return false;
 }
 
 void complete_job(const std::shared_ptr<Job> &job) {
   job->images_completed = 1;
-  job->reason = "JobCompletedSuccessfully";
-  job->state = JobState::completed;
+  update_job(job, JobState::completed, "JobCompletedSuccessfully");
 }
 
 void handle_request(int fd) {
@@ -640,7 +741,14 @@ void handle_request(int fd) {
       } else {
         std::string output_path;
         if (!run_scan(job, output_path)) {
-          send_response(fd, 503, "text/plain", "Scan failed\n");
+          if (job->state == JobState::canceled) {
+            send_response(fd, 404, "", "");
+          } else if (job->state == JobState::aborted) {
+            send_response(fd, 409, "text/plain", "Scan job aborted\n");
+          } else {
+            send_response(fd, 503, "text/plain", "Scan failed\n",
+                          {{"Retry-After", "2"}});
+          }
         } else {
           const bool sent =
               send_file(fd, output_path, job->document_format);
@@ -663,8 +771,7 @@ void handle_request(int fd) {
           kill(child, SIGTERM);
         }
         if (job->state != JobState::completed) {
-          job->reason = "JobCanceledByUser";
-          job->state = JobState::canceled;
+          update_job(job, JobState::canceled, "JobCanceledByUser");
         }
         send_response(fd, 200, "", "");
         std::lock_guard<std::mutex> lock(g_jobs_mutex);
@@ -754,6 +861,9 @@ int main(int argc, char **argv) {
     return 2;
   }
 
+  // Intermediate scan files can contain private documents. Enforce owner-only
+  // permissions even when the bridge is launched outside the wrapper script.
+  umask(0077);
   signal(SIGPIPE, SIG_IGN);
   signal(SIGTERM, handle_signal);
   signal(SIGINT, handle_signal);
@@ -797,6 +907,11 @@ int main(int argc, char **argv) {
       }
       break;
     }
+    const timeval request_timeout = {30, 0};
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &request_timeout,
+               sizeof(request_timeout));
+    setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &request_timeout,
+               sizeof(request_timeout));
     std::thread(handle_request, client).detach();
   }
   const int fd = g_listen_fd.exchange(-1);
