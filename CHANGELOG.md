@@ -16,6 +16,13 @@
   exposes the full A4 preset instead of defaulting to JIS B5.
 - Prevented the address monitor from treating a scanner that is busy moving
   the carriage as offline and restarting the bridge during a scan.
+- Serialized physical scan jobs and added bounded automatic retries,
+  five-minute per-attempt timeouts, and reliable process cancellation.
+- Made runtime and scan working files owner-only.
+- Added automatic cleanup for superseded Docker/AirSane files, disabled CUPS
+  queue sharing, and added bounded log rotation.
+- Added `doctor` and `doctor --repair` commands for local health checks and
+  safe configuration, LaunchAgent, and endpoint repair.
 - Kept the ability to run an installed 1.3.x AirSane runtime as a migration
   fallback, while 1.4.0 packages use the direct bridge.
 - Verified an Image Capture overview and a physical 150 dpi color JPEG scan

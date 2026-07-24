@@ -179,7 +179,8 @@ info "Creating the compatibility print queue"
   -v "${printer_uri}" \
   -m "${DEFAULT_PPD_MODEL}" \
   -D "Canon G3010 series (Mac compatibility)" \
-  -L "Local Network"
+  -L "Local Network" \
+  -o printer-is-shared=false
 
 /usr/bin/lpoptions \
   -p "${queue_name}" \
