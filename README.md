@@ -12,10 +12,12 @@ Printing pairs:
 - the printer's raw LPD `auto` queue.
 
 Scanning uses the printer's standards-based WSD Scan service through
-`sane-airscan` in a small, reproducible local container.
+`sane-airscan` in a small, reproducible local container. An AirSane bridge
+re-publishes it as eSCL/AirScan for Apple's Image Capture interface.
 
 Tested on an Apple silicon Mac running macOS 26.5.2 with Canon's G3000 CUPS
-driver 16.91.0.0. A physical 300 dpi color network scan was also verified.
+driver 16.91.0.0. A physical scan initiated from Apple Image Capture was
+verified on a Canon G3810 sold as part of the G3010 series.
 
 > [!IMPORTANT]
 > This project does not include Canon software. Install the official G3000
@@ -31,10 +33,14 @@ driver 16.91.0.0. A physical 300 dpi color network scan was also verified.
 - Can send a macOS test page.
 - Includes a reversible uninstaller and a read-only diagnostic tool.
 - Scans over Wi-Fi/LAN without USB or a cloud service.
+- Appears as `Canon G3010 Scanner` in Apple Image Capture and compatible
+  macOS scan panels.
 - Supports 150/300/600 dpi, color/grayscale, A4/Letter/full-bed, and
-  JPEG/PNG/TIFF output.
+  JPEG/PNG/TIFF/PDF output through the GUI or CLI.
 - Uses a reproducible SANE runtime and never requires the printer's web
   administrator password.
+- Installs a per-user launch agent that restores the scanner bridge after
+  login.
 - Builds an installable macOS `.pkg` containing both print and scan wrappers.
 
 ## Requirements
@@ -60,7 +66,7 @@ The installer verifies that this file exists before changing the print queue:
 ### Install from a release package
 
 1. Install Canon's official G3000 CUPS driver.
-2. Download `Canon-G3010-macOS-Compat-1.1.0.pkg` from GitHub Releases.
+2. Download `Canon-G3010-macOS-Compat-1.2.0.pkg` from GitHub Releases.
 3. Open the package and follow the macOS installer.
 4. Print to `Canon G3010 series (Mac compatibility)`.
 
@@ -69,7 +75,7 @@ Terminal method instead of disabling Gatekeeper:
 
 ```sh
 sudo installer \
-  -pkg Canon-G3010-macOS-Compat-1.1.0.pkg \
+  -pkg Canon-G3010-macOS-Compat-1.2.0.pkg \
   -target /
 ```
 
@@ -89,7 +95,36 @@ If the printer uses a custom hostname:
 
 Run `./src/install.sh --help` for every option.
 
-## Scan
+## Scan from the macOS interface
+
+The release package installs the background bridge automatically for the
+signed-in user when it can discover the printer. From source, run this once:
+
+```sh
+./scanner/bridge/bridge.sh install --ip 192.168.1.50
+```
+
+The IP address can be omitted when the installed print queue or DNS-SD service
+is available. The first start builds the local open-source runtime and can
+take several minutes.
+
+Then:
+
+1. Put the original face-down on the scanner glass.
+2. Open **Image Capture** (`图像捕捉`).
+3. Select **Canon G3010 Scanner** under **Shared**.
+4. Choose the size or **Show Details**, then click **Scan**.
+
+Check the bridge without moving the scanner head:
+
+```sh
+./scanner/bridge/bridge.sh status
+```
+
+After package installation, use
+`canon-g3010-scanner-bridge status` instead.
+
+## Scan from the command line
 
 Start Docker Desktop, place a document on the flatbed, and run:
 
@@ -119,10 +154,9 @@ runtime from Debian's signed packages. More examples:
 ./scanner/scan.sh --help
 ```
 
-This is a real SANE-compatible network scan path. It produces ordinary image
-files usable by Preview, Photos, OCR tools, and document applications. It
-does not install an ICA plug-in, so the scanner may not appear inside Apple's
-Image Capture application.
+The GUI bridge and CLI use the same real SANE-compatible network scan path.
+No unsigned ICA plug-in is installed: macOS uses its built-in eSCL/AirScan
+client.
 
 ## Uninstall
 
@@ -130,7 +164,8 @@ Image Capture application.
 ./src/uninstall.sh
 ```
 
-The uninstaller removes only the `Canon_G3010` queue. It does not remove the
+The uninstaller removes the `Canon_G3010` queue and this project's per-user
+scanner bridge. It does not remove Docker Desktop, local Docker images, or the
 official Canon dependency.
 
 ## Diagnose
@@ -174,6 +209,18 @@ Canon G3010 scanner
 JPEG/PNG/TIFF on the Mac
 ```
 
+For Image Capture, AirSane adds a standards adapter in front:
+
+```text
+Apple Image Capture / macOS scan panel
+      ↓  eSCL/AirScan over localhost
+AirSane bridge inside the local container
+      ↓  SANE
+sane-airscan
+      ↓  WSD Scan SOAP/HTTP
+Canon G3010 scanner
+```
+
 The G3010 advertises IPP 2.0 and PWG Raster, but a 600 dpi macOS driverless
 test produced `spool-area-full-report` and remained at 0%. The same printer
 accepted the G3000 renderer's compact native data through LPD and completed
@@ -197,8 +244,12 @@ Artifacts are written to `dist/`:
 
 ## Known limitations
 
-- Scanning is command-line SANE, not an ICA plug-in for Image Capture.
 - Docker Desktop is required for the portable scanner runtime.
+- The scanner is available while the Mac, Docker Desktop, printer, and local
+  network are running.
+- The Bonjour record can be discovered on the local network, but its scanner
+  endpoint is bound to this Mac's loopback address and is not remotely
+  reachable.
 - USB printing has not been implemented; the current transport is network LPD.
 - The compatibility depends on Canon's G3000 renderer and is not guaranteed by
   Canon.

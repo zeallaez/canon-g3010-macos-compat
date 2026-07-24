@@ -49,7 +49,7 @@ if command -v docker >/dev/null 2>&1; then
   if docker info >/dev/null 2>&1; then
     print -- "Docker Desktop: running"
     if docker image inspect \
-      "canon-g3010-macos-compat-scanner:1.1.0" >/dev/null 2>&1; then
+      "canon-g3010-macos-compat-scanner:1.2.0" >/dev/null 2>&1; then
       print -- "Scanner image: installed"
     else
       print -- "Scanner image: not built yet"
@@ -61,6 +61,15 @@ else
   print -- "Docker Desktop: not installed"
 fi
 print -- "Scanner test: ./scanner/scan.sh --ip ADDRESS --list"
+
+section "macOS Image Capture bridge"
+if [[ -x "./scanner/bridge/bridge.sh" ]]; then
+  ./scanner/bridge/bridge.sh status
+elif [[ -x "/usr/local/bin/canon-g3010-scanner-bridge" ]]; then
+  /usr/local/bin/canon-g3010-scanner-bridge status
+else
+  print -- "Image Capture bridge: not installed"
+fi
 
 section "Notes"
 print -- "This report is read-only."

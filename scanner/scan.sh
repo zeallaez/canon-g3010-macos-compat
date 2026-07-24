@@ -4,7 +4,7 @@ set -eu
 readonly DEFAULT_QUEUE="Canon_G3010"
 readonly DEFAULT_SERVICE_NAME="Canon G3010 series"
 readonly DEFAULT_SERVICE_TYPE="_printer._tcp"
-readonly DEFAULT_IMAGE="canon-g3010-macos-compat-scanner:1.1.0"
+readonly DEFAULT_IMAGE="canon-g3010-macos-compat-scanner:1.2.0"
 readonly DEVICE_NAME="airscan:w0:Canon G3010 WSD"
 
 script_dir="${0:A:h}"

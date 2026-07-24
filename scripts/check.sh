@@ -12,6 +12,8 @@ scripts=(
   "${repo_root}/scripts/build-pkg.sh"
   "${repo_root}/scripts/check.sh"
   "${repo_root}/scanner/scan.sh"
+  "${repo_root}/scanner/bridge/bridge.sh"
+  "${repo_root}/scanner/bridge/entrypoint.sh"
   "${repo_root}/package/scripts/preinstall"
   "${repo_root}/package/scripts/postinstall"
 )
@@ -27,11 +29,22 @@ done
 "${repo_root}/src/install.sh" --help >/dev/null
 "${repo_root}/src/uninstall.sh" --help >/dev/null
 "${repo_root}/scanner/scan.sh" --help >/dev/null
+"${repo_root}/scanner/bridge/bridge.sh" --help >/dev/null
 
 [[ -s "${repo_root}/scanner/Dockerfile" ]] || {
   print -u2 -- "Missing or empty: scanner/Dockerfile"
   exit 1
 }
+
+for bridge_file in \
+  scanner/bridge/Dockerfile \
+  scanner/bridge/bridge.sh \
+  scanner/bridge/entrypoint.sh; do
+  [[ -s "${repo_root}/${bridge_file}" ]] || {
+    print -u2 -- "Missing or empty: ${bridge_file}"
+    exit 1
+  }
+done
 
 for doc in \
   README.md \

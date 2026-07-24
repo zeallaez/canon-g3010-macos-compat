@@ -85,20 +85,19 @@ resolution, color mode, and rectangle, then retrieves the image stream.
 
 The project uses the open-source `sane-airscan` backend to translate between
 this WSD Scan protocol and the standard SANE API. `scanimage` exposes the
-result as JPEG, PNG, or TIFF. No Canon scanner binary, private password, USB
-connection, or cloud service participates in this path.
+result to the CLI. For macOS applications, AirSane translates the same SANE
+device into the standard eSCL/AirScan protocol that Apple's built-in scanner
+client understands. No Canon scanner binary, private password, USB connection,
+or cloud service participates in this path.
 
 ## 6. Scanning data flow
 
 ```text
-macOS scan wrapper
-    │
+Apple Image Capture / macOS scan panel
+    │  eSCL/AirScan
     ▼
-Docker Desktop local Linux container
-    │
-    ▼
-SANE scanimage
-    │
+AirSane in a local Docker Desktop container
+    │  SANE API
     ▼
 sane-airscan WSD backend
     │  SOAP/HTTP over the local network
@@ -106,13 +105,17 @@ sane-airscan WSD backend
 G3010 /wsd/scanservice.cgi
     │
     ▼
-JPEG/PNG/TIFF file on the Mac
+JPEG/PNG/PDF returned to the macOS application
 ```
 
+The optional CLI path enters the same container at `scanimage` and writes
+JPEG, PNG, or TIFF directly to a selected Mac directory.
+
 The container provides a reproducible runtime without modifying macOS system
-frameworks or installing an unsigned ICA bundle. The wrapper mounts only a
-temporary scanner configuration and the selected output directory. It does
-not expose the rest of the Mac filesystem to the scanner runtime.
+frameworks or installing an unsigned ICA bundle. For the GUI bridge, it mounts
+only generated configuration files. The CLI additionally mounts only the
+selected output directory. Neither path exposes the rest of the Mac filesystem
+to the scanner runtime.
 
 The physical device reported and successfully used these capabilities:
 
@@ -133,9 +136,16 @@ using DNS-SD and extracts the target hostname from the service record. A
 hostname can also be passed explicitly with `--host`.
 
 For scanning, the wrapper first tries the installed CUPS queue, then the same
-DNS-SD service. `--ip` bypasses discovery. A temporary `sane-airscan`
+DNS-SD service. `--ip` bypasses discovery. A generated `sane-airscan`
 configuration points directly to the device's WSD scanner endpoint, which
 avoids relying on multicast discovery through Docker Desktop's network layer.
+
+The GUI bridge publishes `Canon G3010 Scanner._uscan._tcp.local.` from the Mac
+with `rs=eSCL`, using the dedicated proxy host
+`canon-g3010-bridge.local.` at `127.0.0.1:8090`. Image Capture discovers that
+Bonjour record and sends eSCL requests through the Mac's loopback interface.
+The per-user launch agent keeps both the service record and bridge alive after
+login.
 
 ## 8. Defaults
 
@@ -160,12 +170,15 @@ The scanner defaults to A4, 300 dpi, color, and JPEG.
 - Print jobs and scans are transmitted directly between the Mac and printer.
 - The printer's web administrator password is not used or stored.
 - The scan container can write only to the chosen output directory.
+- The GUI eSCL port is bound to `127.0.0.1`; other LAN devices cannot connect
+  to it even though they may see the Bonjour record.
 - The scripts do not collect telemetry.
 - The project does not disable Gatekeeper or System Integrity Protection.
 
 ## 10. Compatibility boundary
 
 - Native open-source BJRaster3 renderer independent of Canon's G3000 package;
-- optional native macOS ICA front end over the existing WSD implementation;
+- native ICA plug-in implementation (the current GUI path uses Apple's built-in
+  eSCL/AirScan client);
 - Developer ID signing and notarization;
 - automated testing on more macOS releases and firmware versions.

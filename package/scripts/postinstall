@@ -3,6 +3,7 @@ set -eu
 
 readonly INSTALLER="/usr/local/libexec/canon-g3010-macos-compat/install.sh"
 readonly PPD_PATH="/Library/Printers/PPDs/Contents/Resources/CanonIJG3000series.ppd.gz"
+readonly BRIDGE="/usr/local/bin/canon-g3010-scanner-bridge"
 
 if [[ ! -x "${INSTALLER}" ]]; then
   print -u2 -- "Compatibility installer is missing: ${INSTALLER}"
@@ -16,4 +17,24 @@ else
 fi
 
 print -- "Network scanner command installed: /usr/local/bin/canon-g3010-scan"
+
+console_user="$(/usr/bin/stat -f '%Su' /dev/console)"
+if [[ -x "${BRIDGE}" && -n "${console_user}" && "${console_user}" != "root" ]]; then
+  console_uid="$(/usr/bin/id -u "${console_user}")"
+  console_home="$(
+    /usr/bin/dscl . -read "/Users/${console_user}" NFSHomeDirectory 2>/dev/null |
+      /usr/bin/awk '{print $2; exit}'
+  )"
+  if [[ -n "${console_home}" ]]; then
+    if /bin/launchctl asuser "${console_uid}" \
+      /usr/bin/sudo -u "${console_user}" \
+      /usr/bin/env HOME="${console_home}" USER="${console_user}" \
+      "${BRIDGE}" install; then
+      print -- "Image Capture scanner bridge installed for ${console_user}."
+    else
+      print -- "Automatic scanner bridge setup was deferred."
+      print -- "Run as the signed-in user: ${BRIDGE} install --ip ADDRESS"
+    fi
+  fi
+fi
 exit 0

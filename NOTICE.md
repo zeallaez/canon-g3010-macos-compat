@@ -23,3 +23,11 @@ Debian when the user builds the image; their respective licenses continue to
 apply inside that image. They are not copied into this Git repository.
 
 Project: https://github.com/alexpevzner/sane-airscan
+
+The optional macOS Image Capture bridge builds AirSane from source inside the
+local container image. AirSane is an independent project licensed under
+GPL-3.0. Its source and license are obtained from its upstream repository
+during the image build and remain subject to that license. AirSane source or
+binaries are not copied into this Git repository.
+
+Project: https://github.com/SimulPiscator/AirSane
