@@ -4,14 +4,14 @@ set -eu
 readonly DEFAULT_QUEUE="Canon_G3010"
 readonly DEFAULT_SERVICE_NAME="Canon G3010 series"
 readonly DEFAULT_SERVICE_TYPE="_printer._tcp"
-readonly DEFAULT_IMAGE="canon-g3010-macos-compat-scanner:1.1.0"
 readonly DEVICE_NAME="airscan:w0:Canon G3010 WSD"
 
 script_dir="${0:A:h}"
-runtime_dir="${script_dir}"
-if [[ ! -f "${runtime_dir}/Dockerfile" ]]; then
-  runtime_dir="/usr/local/libexec/canon-g3010-macos-compat/scanner"
-fi
+repo_root="${script_dir:h}"
+support_dir="${HOME}/Library/Application Support/Canon G3010 macOS Compat"
+installed_runtime="${support_dir}/scanner-native"
+system_runtime="/usr/local/libexec/canon-g3010-macos-compat/scanner-native"
+source_runtime="${repo_root}/build/native-runtime"
 
 printer_ip=""
 queue_name="${DEFAULT_QUEUE}"
@@ -21,35 +21,30 @@ scan_mode="color"
 paper="a4"
 format="jpeg"
 action="scan"
-image_name="${CANON_G3010_SCAN_IMAGE:-${DEFAULT_IMAGE}}"
 temporary_dir=""
 
 usage() {
   cat <<'EOF'
-Canon G3010 network scanner (WSD/SANE)
+Canon G3010 native macOS network scanner (WSD/SANE)
 
 Usage:
-  ./scanner/scan.sh [options]
+  canon-g3010-scan [options]
 
 Options:
   --ip ADDRESS       Printer IPv4 address. If omitted, use the installed
                      CUPS queue or DNS-SD service discovery.
   --queue NAME       CUPS queue used for address discovery
                      (default: Canon_G3010).
-  --output FILE      Destination file (default: timestamped JPEG in the
-                     current directory).
+  --output FILE      Destination file (default: timestamped JPEG).
   --resolution DPI   150, 300, or 600 (default: 300).
   --mode MODE        color or gray (default: color).
   --paper SIZE       a4, letter, or full (default: a4).
   --format FORMAT    jpeg, png, or tiff (default: jpeg).
   --list             Detect the scanner without scanning.
-  --build             Build or rebuild the local scanner runtime.
+  --build             Build the native runtime from pinned source versions.
   -h, --help         Show this help.
 
-Examples:
-  ./scanner/scan.sh --ip 192.168.1.50 --output scan.jpg
-  ./scanner/scan.sh --resolution 600 --mode gray --format png \
-    --output document.png
+Docker is not required.
 EOF
 }
 
@@ -101,7 +96,7 @@ discover_queue_host() {
 
 discover_dnssd_host() {
   local lookup_file lookup_pid resolved_host i
-  lookup_file="$(/usr/bin/mktemp -t canon-g3010-dnssd)"
+  lookup_file="$(/usr/bin/mktemp -t canon-g3010-scan-dnssd)"
 
   /usr/bin/dns-sd \
     -L "${DEFAULT_SERVICE_NAME}" \
@@ -110,15 +105,12 @@ discover_dnssd_host() {
   lookup_pid=$!
 
   for i in {1..10}; do
-    if /usr/bin/grep -q "can be reached at" "${lookup_file}"; then
-      break
-    fi
+    /usr/bin/grep -q "can be reached at" "${lookup_file}" && break
     /bin/sleep 1
   done
 
   /bin/kill "${lookup_pid}" 2>/dev/null || true
   wait "${lookup_pid}" 2>/dev/null || true
-
   resolved_host="$(
     /usr/bin/sed -nE \
       's/.* can be reached at ([^: ]+):[0-9]+.*/\1/p' \
@@ -145,27 +137,42 @@ resolve_ipv4() {
   print -r -- "${resolved}"
 }
 
-ensure_docker() {
-  command -v docker >/dev/null 2>&1 ||
-    fail "Docker Desktop is required. Install and start it, then retry."
-  docker info >/dev/null 2>&1 ||
-    fail "Docker Desktop is installed but not running."
+discover_printer_ip() {
+  local host resolved
+  host="$(discover_queue_host)"
+  [[ -n "${host}" ]] || host="$(discover_dnssd_host)"
+  [[ -n "${host}" ]] || return 1
+  resolved="$(resolve_ipv4 "${host}")"
+  validate_ipv4 "${resolved}" || return 1
+  print -r -- "${resolved}"
 }
 
-build_image() {
-  [[ -f "${runtime_dir}/Dockerfile" ]] ||
-    fail "scanner runtime is missing: ${runtime_dir}/Dockerfile"
-
-  info "Building the open-source SANE scanner runtime"
-  docker build \
-    --tag "${image_name}" \
-    "${runtime_dir}"
-}
-
-ensure_image() {
-  if ! docker image inspect "${image_name}" >/dev/null 2>&1; then
-    build_image
+select_runtime() {
+  if [[ -x "${installed_runtime}/bin/scanimage" ]]; then
+    print -r -- "${installed_runtime}"
+  elif [[ -x "${system_runtime}/bin/scanimage" ]]; then
+    print -r -- "${system_runtime}"
+  elif [[ -x "${source_runtime}/bin/scanimage" ]]; then
+    print -r -- "${source_runtime}"
+  else
+    return 1
   fi
+}
+
+write_config() {
+  temporary_dir="$(/usr/bin/mktemp -d /private/tmp/canon-g3010-scan.XXXXXX)"
+  {
+    print -- "airscan"
+  } >"${temporary_dir}/dll.conf"
+  {
+    print -- "[devices]"
+    print -- "\"Canon G3010 WSD\" = http://${printer_ip}:80/wsd/scanservice.cgi, WSD"
+    print -- ""
+    print -- "[options]"
+    print -- "discovery = disable"
+    print -- "protocol = manual"
+    print -- "model = hardware"
+  } >"${temporary_dir}/airscan.conf"
 }
 
 while (( $# > 0 )); do
@@ -224,10 +231,11 @@ while (( $# > 0 )); do
 done
 
 [[ "$(/usr/bin/uname -s)" == "Darwin" ]] ||
-  fail "the host wrapper currently supports macOS only"
+  fail "this scanner wrapper supports macOS only"
 
 validate_safe_token "queue name" "${queue_name}"
-[[ "${resolution}" == "150" || "${resolution}" == "300" || "${resolution}" == "600" ]] ||
+[[ "${resolution}" == "150" || "${resolution}" == "300" ||
+   "${resolution}" == "600" ]] ||
   fail "--resolution must be 150, 300, or 600"
 [[ "${scan_mode}" == "color" || "${scan_mode}" == "gray" ]] ||
   fail "--mode must be color or gray"
@@ -236,97 +244,62 @@ validate_safe_token "queue name" "${queue_name}"
 [[ "${format}" == "jpeg" || "${format}" == "png" || "${format}" == "tiff" ]] ||
   fail "--format must be jpeg, png, or tiff"
 
-ensure_docker
-
 if [[ "${action}" == "build" ]]; then
-  build_image
-  info "Scanner runtime ready: ${image_name}"
-  exit 0
+  build_script="${repo_root}/scanner/native/build-native.sh"
+  [[ -x "${build_script}" ]] ||
+    fail "native build script is unavailable in this installation"
+  exec "${build_script}"
 fi
 
-ensure_image
+runtime="$(select_runtime)" || fail "native scanner runtime is not installed"
 
 if [[ -z "${printer_ip}" ]]; then
-  discovered_host="$(discover_queue_host)"
-  if [[ -z "${discovered_host}" ]]; then
-    info "The CUPS queue was not found; trying DNS-SD discovery"
-    discovered_host="$(discover_dnssd_host)"
-  fi
-  [[ -n "${discovered_host}" ]] ||
-    fail "printer address discovery failed; rerun with --ip ADDRESS"
-  printer_ip="$(resolve_ipv4 "${discovered_host}")"
+  printer_ip="$(discover_printer_ip)" ||
+    fail "printer discovery failed; rerun with --ip ADDRESS"
 fi
-
-validate_ipv4 "${printer_ip}" ||
-  fail "could not resolve a valid IPv4 address; rerun with --ip ADDRESS"
-
-temporary_dir="$(/usr/bin/mktemp -d -t canon-g3010-scan)"
-config_path="${temporary_dir}/airscan.conf"
-{
-  print -- "[devices]"
-  print -- "\"Canon G3010 WSD\" = http://${printer_ip}:80/wsd/scanservice.cgi, WSD"
-  print -- ""
-  print -- "[options]"
-  print -- "discovery = disable"
-  print -- "protocol = manual"
-  print -- "model = hardware"
-} >"${config_path}"
-
-typeset -a docker_mounts
-docker_mounts=(
-  --rm
-  --mount "type=bind,source=${config_path},target=/etc/sane.d/airscan.conf,readonly"
-)
+validate_ipv4 "${printer_ip}" || fail "invalid IPv4 address: ${printer_ip}"
+write_config
 
 if [[ "${action}" == "list" ]]; then
-  info "Checking WSD scanner at ${printer_ip}"
-  docker run "${docker_mounts[@]}" "${image_name}" -L
+  info "Detecting Canon G3010 through native WSD"
+  SANE_CONFIG_DIR="${temporary_dir}" \
+  LD_LIBRARY_PATH="${runtime}/lib/sane" \
+    "${runtime}/bin/scanimage" -L
   exit 0
 fi
+
+case "${paper}" in
+  a4)
+    width="210"
+    height="297"
+    ;;
+  letter)
+    width="215.9"
+    height="279.4"
+    ;;
+  full)
+    width="215.9"
+    height="296.672"
+    ;;
+esac
 
 case "${scan_mode}" in
   color) sane_mode="Color" ;;
   gray) sane_mode="Gray" ;;
 esac
 
-case "${paper}" in
-  a4)
-    scan_width="210"
-    scan_height="296.672"
-    ;;
-  letter)
-    scan_width="215.9"
-    scan_height="279.4"
-    ;;
-  full)
-    scan_width="215.9"
-    scan_height="296.672"
-    ;;
-esac
+/bin/mkdir -p "${output_path:A:h}"
+info "Scanning natively from ${printer_ip} at ${resolution} dpi"
+SANE_CONFIG_DIR="${temporary_dir}" \
+LD_LIBRARY_PATH="${runtime}/lib/sane" \
+  "${runtime}/bin/scanimage" \
+    -d "${DEVICE_NAME}" \
+    --resolution "${resolution}" \
+    --mode "${sane_mode}" \
+    --format "${format}" \
+    -x "${width}" \
+    -y "${height}" \
+    --output-file "${output_path:A}" \
+    --progress
 
-if [[ "${output_path}" != /* ]]; then
-  output_path="${PWD}/${output_path}"
-fi
-output_dir="${output_path:h}"
-output_file="${output_path:t}"
-[[ -d "${output_dir}" ]] ||
-  fail "output directory does not exist: ${output_dir}"
-[[ -n "${output_file}" && "${output_file}" != "." && "${output_file}" != ".." ]] ||
-  fail "invalid output file"
-
-info "Scanning ${paper:u}, ${resolution} dpi, ${sane_mode} from ${printer_ip}"
-docker run \
-  "${docker_mounts[@]}" \
-  --mount "type=bind,source=${output_dir},target=/output" \
-  "${image_name}" \
-  --device-name "${DEVICE_NAME}" \
-  --format="${format}" \
-  --resolution "${resolution}" \
-  --mode "${sane_mode}" \
-  --source Flatbed \
-  -x "${scan_width}" \
-  -y "${scan_height}" \
-  --output-file "/output/${output_file}"
-
-[[ -s "${output_path}" ]] || fail "scanner returned no output"
-info "Saved: ${output_path}"
+info "Saved ${output_path:A}"

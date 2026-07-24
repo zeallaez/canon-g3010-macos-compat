@@ -11,6 +11,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate scripts and documentation
         run: make check
+      - name: Install native scanner build dependencies
+        run: brew install sane-backends gnutls jpeg-turbo libpng libtiff
       - name: Build compatibility package
         run: make package
       - uses: actions/upload-artifact@v4

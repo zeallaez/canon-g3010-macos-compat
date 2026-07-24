@@ -44,23 +44,41 @@ section "Visible printer services"
   print -- "No matching service was reported by lpinfo."
 
 section "WSD/SANE scanner runtime"
-if command -v docker >/dev/null 2>&1; then
-  print -- "Docker command: $(command -v docker)"
-  if docker info >/dev/null 2>&1; then
-    print -- "Docker Desktop: running"
-    if docker image inspect \
-      "canon-g3010-macos-compat-scanner:1.1.0" >/dev/null 2>&1; then
-      print -- "Scanner image: installed"
-    else
-      print -- "Scanner image: not built yet"
-    fi
+support_runtime="${HOME}/Library/Application Support/Canon G3010 macOS Compat/scanner-native"
+system_runtime="/usr/local/libexec/canon-g3010-macos-compat/scanner-native"
+source_runtime="./build/native-runtime"
+if [[ -x "${support_runtime}/bin/scanimage" ]]; then
+  native_runtime="${support_runtime}"
+elif [[ -x "${system_runtime}/bin/scanimage" ]]; then
+  native_runtime="${system_runtime}"
+elif [[ -x "${source_runtime}/bin/scanimage" ]]; then
+  native_runtime="${source_runtime}"
+else
+  native_runtime=""
+fi
+if [[ -n "${native_runtime}" ]]; then
+  print -- "Native runtime: ${native_runtime}"
+  if [[ -x "${native_runtime}/bin/canon-g3010-escl-bridge" ]]; then
+    print -- "Image Capture engine: direct WSD-to-eSCL"
+  elif [[ -x "${native_runtime}/bin/airsaned" ]]; then
+    print -- "Image Capture engine: legacy AirSane migration fallback"
   else
-    print -- "Docker Desktop: not running or not accessible"
+    print -- "Image Capture engine: missing"
   fi
 else
-  print -- "Docker Desktop: not installed"
+  print -- "Native runtime: not built or installed"
 fi
+print -- "Docker Desktop: not required"
 print -- "Scanner test: ./scanner/scan.sh --ip ADDRESS --list"
+
+section "macOS Image Capture bridge"
+if [[ -x "./scanner/bridge/bridge.sh" ]]; then
+  ./scanner/bridge/bridge.sh status
+elif [[ -x "/usr/local/bin/canon-g3010-scanner-bridge" ]]; then
+  /usr/local/bin/canon-g3010-scanner-bridge status
+else
+  print -- "Image Capture bridge: not installed"
+fi
 
 section "Notes"
 print -- "This report is read-only."

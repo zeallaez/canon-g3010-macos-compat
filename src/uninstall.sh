@@ -12,7 +12,8 @@ Usage:
   ./src/uninstall.sh [--queue NAME] [--yes]
 
 This removes only the compatibility CUPS queue. It does not remove Canon's
-official G3000 driver.
+official G3000 driver. If the per-user scanner bridge is installed, it is
+stopped and removed as well.
 EOF
 }
 
@@ -46,13 +47,8 @@ if [[ ! "${queue_name}" =~ '^[A-Za-z0-9._-]+$' ]]; then
   exit 2
 fi
 
-if ! /usr/bin/lpstat -p "${queue_name}" >/dev/null 2>&1; then
-  print -- "Queue ${queue_name} is not installed."
-  exit 0
-fi
-
 if [[ "${assume_yes}" != "yes" ]]; then
-  print -n -- "Remove the ${queue_name} print queue? [y/N] "
+  print -n -- "Remove the ${queue_name} queue and scanner bridge? [y/N] "
   read -r answer
   [[ "${answer:l}" == "y" || "${answer:l}" == "yes" ]] || {
     print -- "Cancelled."
@@ -60,6 +56,20 @@ if [[ "${assume_yes}" != "yes" ]]; then
   }
 fi
 
-/usr/sbin/lpadmin -x "${queue_name}"
-print -- "Removed ${queue_name}."
+if /usr/bin/lpstat -p "${queue_name}" >/dev/null 2>&1; then
+  /usr/sbin/lpadmin -x "${queue_name}"
+  print -- "Removed ${queue_name}."
+else
+  print -- "Queue ${queue_name} is not installed."
+fi
+
+bridge="/usr/local/bin/canon-g3010-scanner-bridge"
+if [[ ! -x "${bridge}" ]]; then
+  source_bridge="${0:A:h:h}/scanner/bridge/bridge.sh"
+  [[ -x "${source_bridge}" ]] && bridge="${source_bridge}"
+fi
+if [[ -x "${bridge}" ]]; then
+  "${bridge}" uninstall
+fi
+
 print -- "Canon's official G3000 driver was left installed."

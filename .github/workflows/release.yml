@@ -13,6 +13,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install native scanner build dependencies
+        run: brew install sane-backends gnutls jpeg-turbo libpng libtiff
       - name: Build release artifacts
         run: make package
       - name: Publish GitHub release
