@@ -709,10 +709,13 @@ write_launch_agent() {
 
 install_bridge() {
   local runtime
-  if [[ -x "${system_runtime}/bin/canon-g3010-escl-bridge" ]]; then
-    runtime="${system_runtime}"
-  elif [[ -x "${source_runtime}/bin/canon-g3010-escl-bridge" ]]; then
+  # A source-tree invocation must prefer the runtime that was just built and
+  # signed there. Installed package invocations do not have source_runtime and
+  # therefore continue to use the packaged system runtime.
+  if [[ -x "${source_runtime}/bin/canon-g3010-escl-bridge" ]]; then
     runtime="${source_runtime}"
+  elif [[ -x "${system_runtime}/bin/canon-g3010-escl-bridge" ]]; then
+    runtime="${system_runtime}"
   elif [[ -x "${installed_runtime}/bin/canon-g3010-escl-bridge" ]]; then
     runtime="${installed_runtime}"
   else
