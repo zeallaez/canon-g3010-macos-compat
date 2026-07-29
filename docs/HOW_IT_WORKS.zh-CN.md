@@ -168,10 +168,13 @@ DNS-SD URI，因此 IP 变化时打印也会重新解析；也可以用 `--host`
   也无法连接扫描端点；
 - 脚本不收集遥测数据；
 - 本项目不会关闭 Gatekeeper 或系统完整性保护。
+- 维护者构建会在仓库外固定 Apple Development 证书指纹，并用同一身份
+  签署所有随包 Mach-O 文件；构建过程会校验证书颁发者与 Team ID，固定
+  证书不可用时直接失败。私钥始终保留在 macOS 钥匙串中。
 
 ## 10. 兼容边界
 
 - 编写不依赖佳能 G3000 包的原生开源 BJRaster3 渲染器；
 - 原生 macOS ICA 插件（当前图形界面使用系统内置 eSCL/AirScan 客户端）；
-- Developer ID 签名和公证；
+- 安装包容器的 Developer ID Installer 签名和公证；
 - 在更多 macOS 和固件版本上自动测试。

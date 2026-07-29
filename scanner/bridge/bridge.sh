@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -eu
 
-readonly BRIDGE_VERSION="1.4.1"
+readonly BRIDGE_VERSION="1.4.2"
 readonly LABEL="io.github.zeallaez.canon-g3010-scanner-bridge"
 readonly SERVICE_NAME="Canon G3010 series"
 readonly SERVICE_TYPE="_uscan._tcp"
@@ -337,6 +337,31 @@ check_runtime() {
     fail "native scanimage runtime is missing: ${runtime}/bin/scanimage"
   [[ -f "${runtime}/lib/sane/libsane-airscan.1.so" ]] ||
     fail "native WSD backend is missing: ${runtime}/lib/sane/libsane-airscan.1.so"
+}
+
+runtime_signing_summary() {
+  local runtime="$1"
+  local binary="${runtime}/bin/canon-g3010-escl-bridge"
+  local details team_id
+
+  [[ -x "${binary}" ]] || {
+    print -- "unavailable"
+    return
+  }
+  details="$(/usr/bin/codesign -dv --verbose=4 "${binary}" 2>&1 || true)"
+  team_id="$(
+    print -r -- "${details}" |
+      /usr/bin/sed -nE 's/^TeamIdentifier=(.+)$/\1/p' |
+      /usr/bin/head -n 1
+  )"
+  if print -r -- "${details}" |
+    /usr/bin/grep -q '^Authority=Apple Development:'; then
+    print -- "Apple Development (${team_id:-unknown team})"
+  elif print -r -- "${details}" | /usr/bin/grep -q '^Signature=adhoc$'; then
+    print -- "ad hoc"
+  else
+    print -- "unsigned or unrecognized"
+  fi
 }
 
 write_runtime_config() {
@@ -790,6 +815,7 @@ status_bridge() {
   print -- "Automatic IP reconnection: enabled"
   print -- "Automatic offline recovery: enabled"
   print -- "Runtime: native macOS (no Docker)"
+  print -- "Code signing: $(runtime_signing_summary "${runtime}")"
   print -- "LaunchAgent: ${launch_status}"
   print -- "eSCL endpoint: ${endpoint_status}"
   print -- "Endpoint: http://127.0.0.1:${SERVICE_PORT}/eSCL"
@@ -865,6 +891,16 @@ doctor_bridge() {
     print -- "[OK] Direct native WSD-to-eSCL runtime"
   else
     print -- "[FAIL] Direct native runtime is missing"
+    (( problems += 1 ))
+  fi
+
+  if [[ -x "${runtime}/bin/canon-g3010-escl-bridge" ]] &&
+     /usr/bin/codesign --verify --strict \
+       "${runtime}/bin/canon-g3010-escl-bridge" >/dev/null 2>&1 &&
+     [[ "$(runtime_signing_summary "${runtime}")" == "Apple Development ("* ]]; then
+    print -- "[OK] Stable Apple Development code signing: $(runtime_signing_summary "${runtime}")"
+  else
+    print -- "[WARN] Native bridge is not signed with a stable Apple Development identity"
     (( problems += 1 ))
   fi
 

@@ -71,16 +71,17 @@ WSD 扫描链路，因此可以显示在 Apple“图像捕捉”和兼容的 mac
 
 1. 安装佳能官方 G3000 CUPS 驱动。
 2. 从 GitHub Releases 下载
-   `Canon-G3010-macOS-Compat-1.4.1.pkg`。
+   `Canon-G3010-macOS-Compat-1.4.2.pkg`。
 3. 打开安装包，按照 macOS 安装器提示操作。
 4. 打印时选择 `Canon G3010 series (Mac compatibility)`。
 
-当前安装包没有 Developer ID 签名。如果访达阻止打开，请使用下面的
-终端命令，不要关闭 Gatekeeper：
+安装包容器尚未使用 Developer ID Installer 签名和公证；维护者使用固定
+签名身份构建时，其中的原生扫描程序会使用 Apple Development 证书签名。
+如果访达阻止打开安装器，请使用下面的终端命令，不要关闭 Gatekeeper：
 
 ```sh
 sudo installer \
-  -pkg Canon-G3010-macOS-Compat-1.4.1.pkg \
+  -pkg Canon-G3010-macOS-Compat-1.4.2.pkg \
   -target /
 ```
 
@@ -246,6 +247,7 @@ G3010 会广播 IPP 2.0 和 PWG Raster，但 macOS 以 600 dpi 免驱方式发�
 
 ```sh
 make check
+make signing-configure
 make native
 make package
 ```
@@ -253,6 +255,17 @@ make package
 维护者构建需要 Homebrew 的 `sane-backends`、`gnutls`、`jpeg-turbo`、
 `libpng` 和 `libtiff`。最终 `.pkg` 已捆绑原生运行环境，
 普通用户不需要安装 Homebrew。
+
+`make signing-configure` 会把这台 Mac 上唯一可用的 Apple Development
+证书 SHA-1 指纹固定在当前用户的“应用程序支持”目录。配置只保存公开的
+证书指纹，私钥始终留在钥匙串中。以后构建的每一个 Mach-O 可执行文件和
+动态库都会使用这张证书签名，并校验 Apple Development Team ID 一致。
+如果固定证书缺失或过期，本地构建会直接失败，不会悄悄换证书或退回
+临时签名。
+
+可运行 `make signing-status` 查看当前固定身份。GitHub 托管 CI 没有维护者
+私钥，因此只能显式使用临时签名；用于这台 Mac 的正式更新应在本机使用
+固定身份构建。
 
 产物位于 `dist/`：
 
@@ -268,7 +281,8 @@ make package
 - 当前仅实现网络 LPD，未实现 USB 打印；
 - 依赖佳能 G3000 渲染器，佳能不保证这种跨型号兼容；
 - Apple 已弃用传统 PPD/CUPS 厂商驱动，未来 macOS 可能移除此路径；
-- Release 安装包尚未进行 Developer ID 签名和公证。
+- 安装包容器尚未进行 Developer ID Installer 签名和公证；当前稳定的
+  Apple Development 签名覆盖其中的原生程序。
 
 ## 贡献和安全
 

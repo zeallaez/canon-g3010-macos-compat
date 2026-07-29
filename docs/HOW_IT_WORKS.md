@@ -181,11 +181,15 @@ The scanner defaults to A4, 300 dpi, color, and JPEG.
   to it even though they may see the Bonjour record.
 - The scripts do not collect telemetry.
 - The project does not disable Gatekeeper or System Integrity Protection.
+- Maintainer builds pin an Apple Development certificate fingerprint outside
+  the repository and sign every bundled Mach-O file with that exact identity.
+  The build verifies the authority and Team ID and fails if the pinned identity
+  is unavailable. The private key remains in the macOS Keychain.
 
 ## 10. Compatibility boundary
 
 - Native open-source BJRaster3 renderer independent of Canon's G3000 package;
 - native ICA plug-in implementation (the current GUI path uses Apple's built-in
   eSCL/AirScan client);
-- Developer ID signing and notarization;
+- Developer ID Installer signing and notarization of the package container;
 - automated testing on more macOS releases and firmware versions.

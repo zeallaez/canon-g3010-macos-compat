@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.2 - 2026-07-30
+
+- Added a per-Mac pinned Apple Development signing identity for the native
+  scanner bridge and all bundled Mach-O dependencies.
+- Verifies every native signature, authority, and Team ID during builds and
+  fails local builds instead of silently changing identity or using ad-hoc
+  signing when the pinned certificate is unavailable.
+- Added signing configuration/status commands and reports the non-sensitive
+  signing team in bridge status and diagnostics.
+- Clarified that Apple Development payload signing is separate from future
+  Developer ID Installer signing and notarization of the package container.
+
 ## 1.4.1 - 2026-07-29
 
 - Added non-invasive TCP presence monitoring that does not depend on the WSD
