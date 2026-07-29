@@ -154,6 +154,12 @@ when the printer returns, the supervisor rediscovers the address and republishes
 the scanner automatically. Presence failures are ignored while an eSCL job is
 actively processing so a long scan is never interrupted.
 
+After republishing, the bridge terminates the current user's stale `icdd`
+discovery process. macOS launchd immediately recreates it, and an open Image
+Capture window reconnects automatically. Without this refresh, Image Capture
+can retain the failed AirScan session from before a complete printer power
+cycle and report error `-21345` even though the new eSCL endpoint is healthy.
+
 ## 8. Defaults
 
 The installer selects conservative settings shared by G3000 and G3010:

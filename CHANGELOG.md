@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.3 - 2026-07-30
+
+- Refresh the current user's macOS Image Capture discovery cache after the
+  scanner Bonjour service is republished. This prevents error `-21345` after
+  the printer has been fully powered off and then turned back on.
+- Keep the refresh scoped to the user-owned `icdd` process; launchd recreates
+  it automatically, so no logout, reboot, Docker service, or administrator
+  access is required.
+
 ## 1.4.2 - 2026-07-30
 
 - Added a per-Mac pinned Apple Development signing identity for the native

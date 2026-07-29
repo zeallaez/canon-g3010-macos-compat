@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -eu
 
-readonly BRIDGE_VERSION="1.4.2"
+readonly BRIDGE_VERSION="1.4.3"
 readonly LABEL="io.github.zeallaez.canon-g3010-scanner-bridge"
 readonly SERVICE_NAME="Canon G3010 series"
 readonly SERVICE_TYPE="_uscan._tcp"
@@ -19,6 +19,7 @@ readonly REDISCOVERY_INTERVAL="10"
 readonly PRESENCE_PRIMARY_PORT="${CANON_G3010_PRESENCE_PRIMARY_PORT:-80}"
 readonly PRESENCE_SECONDARY_PORT="${CANON_G3010_PRESENCE_SECONDARY_PORT:-515}"
 readonly PRESENCE_CONNECT_TIMEOUT="${CANON_G3010_PRESENCE_TIMEOUT:-2}"
+readonly IMAGE_CAPTURE_REFRESH_DELAY="${CANON_G3010_IMAGE_CAPTURE_REFRESH_DELAY:-1}"
 
 script_path="${0:A}"
 script_dir="${script_path:h}"
@@ -592,6 +593,28 @@ publish_scanner() {
   bonjour_pid=$!
 }
 
+refresh_image_capture_cache() {
+  local icdd_pid=""
+
+  [[ "${CANON_G3010_SKIP_IMAGE_CAPTURE_REFRESH:-no}" != "yes" ]] || return 0
+
+  # Image Capture's per-user discovery daemon can retain a failed AirScan
+  # session after the printer is powered off and the Bonjour service is
+  # withdrawn. Once the service has been republished, restart only that
+  # user-owned cache process. launchd immediately recreates it and an open
+  # Image Capture window reconnects without requiring a logout or reboot.
+  icdd_pid="$(
+    /usr/bin/pgrep -x -u "$(/usr/bin/id -u)" icdd 2>/dev/null |
+      /usr/bin/head -n 1
+  )"
+  [[ -n "${icdd_pid}" ]] || return 0
+
+  /bin/sleep "${IMAGE_CAPTURE_REFRESH_DELAY}"
+  if /bin/kill -TERM "${icdd_pid}" 2>/dev/null; then
+    info "Refreshed macOS Image Capture scanner cache"
+  fi
+}
+
 run_session() {
   local runtime="$1"
   local candidate failures=0
@@ -607,6 +630,7 @@ run_session() {
 
   info "Publishing ${SERVICE_NAME} with UUID ${printer_uuid}"
   publish_scanner
+  refresh_image_capture_cache
 
   while [[ "${shutting_down}" == "no" ]]; do
     /bin/sleep "${PRESENCE_CHECK_INTERVAL}"
