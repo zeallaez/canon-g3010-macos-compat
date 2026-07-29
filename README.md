@@ -29,7 +29,11 @@ verified on a Canon G3810 sold as part of the G3010 series.
 - Creates a system printer named `Canon_G3010`.
 - Automatically discovers the default `Canon G3010 series` service.
 - Reuses the printer's real Bonjour UUID and product name for print and scan.
-- Automatically reconnects through the stable hostname after a DHCP change.
+- Automatically withdraws a stale scan service while the printer is offline,
+  then rediscovers and republishes it after Wi-Fi or DHCP recovery.
+- Refreshes the current user's Image Capture discovery cache after that
+  republish, preventing connection error `-21345` after a full printer
+  power-off/power-on cycle.
 - Supports an explicit hostname when automatic discovery is unavailable.
 - Configures A4, color, plain paper, normal quality, and one-sided printing.
 - Can send a macOS test page.
@@ -74,16 +78,18 @@ The installer verifies that this file exists before changing the print queue:
 ### Install from a release package
 
 1. Install Canon's official G3000 CUPS driver.
-2. Download `Canon-G3010-macOS-Compat-1.4.0.pkg` from GitHub Releases.
+2. Download `Canon-G3010-macOS-Compat-1.4.3.pkg` from GitHub Releases.
 3. Open the package and follow the macOS installer.
 4. Print to `Canon G3010 series (Mac compatibility)`.
 
-The package is currently unsigned. If Finder blocks it, use the documented
-Terminal method instead of disabling Gatekeeper:
+The installer package container is not Developer ID Installer signed or
+notarized. Its native scanner executables are Apple Development signed when
+built by a maintainer with a pinned identity. If Finder blocks the installer,
+use the documented Terminal method instead of disabling Gatekeeper:
 
 ```sh
 sudo installer \
-  -pkg Canon-G3010-macOS-Compat-1.4.0.pkg \
+  -pkg Canon-G3010-macOS-Compat-1.4.3.pkg \
   -target /
 ```
 
@@ -251,6 +257,7 @@ On macOS:
 
 ```sh
 make check
+make signing-configure
 make native
 make package
 ```
@@ -258,6 +265,20 @@ make package
 Maintainer builds require Homebrew packages `sane-backends`, `gnutls`,
 `jpeg-turbo`, `libpng`, and `libtiff`. The resulting `.pkg` bundles
 the native runtime, so end users do not need Homebrew.
+
+`make signing-configure` pins the SHA-1 fingerprint of the Mac's only
+available Apple Development certificate in the current user's Application
+Support directory. Only the public fingerprint is stored; the private key
+never leaves Keychain. Every Mach-O executable and dynamic library in later
+native builds is signed with that exact certificate and verified for the same
+Apple Development Team ID. If the pinned identity is missing or expired, a
+local build fails instead of silently changing identities or falling back to
+ad-hoc signing.
+
+Use `make signing-status` to inspect the configured identity. CI may explicitly
+use ad-hoc signing because hosted runners do not have the maintainer's private
+key; release binaries intended for this Mac should be built with the pinned
+local identity.
 
 Artifacts are written to `dist/`:
 
@@ -277,7 +298,8 @@ Artifacts are written to `dist/`:
   Canon.
 - Apple has deprecated classic PPD/CUPS vendor drivers. A future macOS release
   may remove this path.
-- The release package is not Developer ID signed or notarized.
+- The package container is not Developer ID Installer signed or notarized;
+  stable Apple Development signing currently covers its native payload.
 
 ## Contributing and security
 

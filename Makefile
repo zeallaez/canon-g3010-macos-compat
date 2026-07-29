@@ -1,4 +1,4 @@
-.PHONY: check package native scanner-build scanner-list bridge-install bridge-status bridge-doctor bridge-repair bridge-uninstall clean
+.PHONY: check package native scanner-build scanner-list signing-configure signing-status bridge-install bridge-status bridge-doctor bridge-repair bridge-uninstall clean
 
 check:
 	./scripts/check.sh
@@ -11,6 +11,12 @@ native scanner-build:
 
 scanner-list:
 	./scanner/scan.sh --list
+
+signing-configure:
+	./scripts/configure-signing.sh
+
+signing-status:
+	./scripts/configure-signing.sh --status
 
 bridge-install:
 	./scanner/bridge/bridge.sh install

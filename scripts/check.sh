@@ -11,8 +11,10 @@ scripts=(
   "${repo_root}/scripts/diagnose.sh"
   "${repo_root}/scripts/build-pkg.sh"
   "${repo_root}/scripts/check.sh"
+  "${repo_root}/scripts/configure-signing.sh"
   "${repo_root}/scanner/scan.sh"
   "${repo_root}/scanner/bridge/bridge.sh"
+  "${repo_root}/scanner/bridge/test-monitor.sh"
   "${repo_root}/scanner/native/build-native.sh"
   "${repo_root}/package/scripts/preinstall"
   "${repo_root}/package/scripts/postinstall"
@@ -30,6 +32,8 @@ done
 "${repo_root}/src/uninstall.sh" --help >/dev/null
 "${repo_root}/scanner/scan.sh" --help >/dev/null
 "${repo_root}/scanner/bridge/bridge.sh" --help >/dev/null
+"${repo_root}/scanner/bridge/test-monitor.sh"
+"${repo_root}/scripts/configure-signing.sh" --help >/dev/null
 
 for bridge_file in \
   scanner/bridge/bridge.sh \

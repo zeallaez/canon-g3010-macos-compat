@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.4.3 - 2026-07-30
+
+- Refresh the current user's macOS Image Capture discovery cache after the
+  scanner Bonjour service is republished. This prevents error `-21345` after
+  the printer has been fully powered off and then turned back on.
+- Keep the refresh scoped to the user-owned `icdd` process; launchd recreates
+  it automatically, so no logout, reboot, Docker service, or administrator
+  access is required.
+
+## 1.4.2 - 2026-07-30
+
+- Added a per-Mac pinned Apple Development signing identity for the native
+  scanner bridge and all bundled Mach-O dependencies.
+- Verifies every native signature, authority, and Team ID during builds and
+  fails local builds instead of silently changing identity or using ad-hoc
+  signing when the pinned certificate is unavailable.
+- Added signing configuration/status commands and reports the non-sensitive
+  signing team in bridge status and diagnostics.
+- Clarified that Apple Development payload signing is separate from future
+  Developer ID Installer signing and notarization of the package container.
+
+## 1.4.1 - 2026-07-29
+
+- Added non-invasive TCP presence monitoring that does not depend on the WSD
+  endpoint being idle.
+- Withdraws the stale Bonjour scanner advertisement after three consecutive
+  offline checks and automatically republishes it when the printer returns.
+- Suppresses offline restarts while a real eSCL scan job is processing.
+- Added regression coverage for the presence-probe and active-job guards.
+
 ## 1.4.0 - 2026-07-24
 
 - Added an original lightweight eSCL server that invokes the native

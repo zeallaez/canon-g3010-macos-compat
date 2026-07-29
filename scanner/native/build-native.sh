@@ -11,6 +11,7 @@ downloads="${build_root}/downloads"
 sources="${build_root}/sources"
 objects="${build_root}/objects"
 runtime="${repo_root}/build/native-runtime"
+signing_config="${CANON_G3010_SIGNING_CONFIG:-${HOME}/Library/Application Support/Canon G3010 macOS Compat/signing-identity}"
 
 fail() {
   print -u2 -- "Error: $*"
@@ -19,6 +20,48 @@ fail() {
 
 info() {
   print -- "==> $*"
+}
+
+resolve_signing_identity() {
+  local configured="${CANON_G3010_CODESIGN_IDENTITY:-}"
+  local candidate_output record
+  typeset -a candidates
+
+  if [[ -z "${configured}" && -s "${signing_config}" ]]; then
+    configured="$(/usr/bin/head -n 1 "${signing_config}")"
+  fi
+
+  if [[ -n "${configured}" ]]; then
+    record="$(
+      /usr/bin/security find-identity -v -p codesigning |
+        /usr/bin/awk -v wanted="${configured}" \
+          '$2 == wanted && /"Apple Development:/ { print; exit }'
+    )"
+    [[ -n "${record}" ]] ||
+      fail "pinned Apple Development identity ${configured} is unavailable"
+    print -r -- "${configured}"
+    return
+  fi
+
+  candidate_output="$(
+    /usr/bin/security find-identity -v -p codesigning |
+      /usr/bin/awk '/"Apple Development:/ { print $2 }'
+  )"
+  candidates=()
+  if [[ -n "${candidate_output}" ]]; then
+    candidates=("${(@f)candidate_output}")
+  fi
+  if (( ${#candidates[@]} == 1 )); then
+    print -r -- "${candidates[1]}"
+    return
+  fi
+
+  if [[ "${CI:-}" == "true" || "${CANON_G3010_ALLOW_ADHOC:-no}" == "yes" ]]; then
+    print -- "-"
+    return
+  fi
+
+  fail "no unique Apple Development identity; run scripts/configure-signing.sh or explicitly set CANON_G3010_ALLOW_ADHOC=yes"
 }
 
 [[ "$(/usr/bin/uname -s)" == "Darwin" ]] ||
@@ -38,6 +81,31 @@ readonly jpeg_prefix="$(brew --prefix jpeg-turbo)"
 readonly png_prefix="$(brew --prefix libpng)"
 readonly tiff_prefix="$(brew --prefix libtiff)"
 readonly sdk_root="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
+readonly signing_identity="$(resolve_signing_identity)"
+
+signing_authority=""
+signing_team_id=""
+if [[ "${signing_identity}" == "-" ]]; then
+  info "Using explicit ad-hoc signing (CI or CANON_G3010_ALLOW_ADHOC=yes)"
+else
+  identity_record="$(
+    /usr/bin/security find-identity -v -p codesigning |
+      /usr/bin/awk -v wanted="${signing_identity}" '$2 == wanted { print; exit }'
+  )"
+  signing_authority="$(
+    print -r -- "${identity_record}" |
+      /usr/bin/sed -E \
+        's/^[[:space:]]*[0-9]+\)[[:space:]]+[A-F0-9]+[[:space:]]+"([^"]+)".*$/\1/'
+  )"
+  signing_team_id="$(
+    /usr/bin/security find-certificate -c "${signing_authority}" -p |
+      /usr/bin/openssl x509 -noout -subject |
+      /usr/bin/sed -nE 's#.*\/OU=([^/]+).*#\1#p'
+  )"
+  [[ -n "${signing_team_id}" ]] ||
+    fail "could not determine the Apple Development Team ID"
+  info "Signing native runtime with Apple Development team ${signing_team_id}"
+fi
 
 /bin/mkdir -p "${downloads}" "${sources}" "${objects}"
 /bin/rm -rf "${runtime}"
@@ -207,7 +275,7 @@ done
 
 rewrite_binary() {
   local binary="$1"
-  local dependency dependency_name replacement
+  local dependency dependency_name replacement signature_details
 
   while IFS= read -r dependency; do
     dependency_name="${dependency:t}"
@@ -244,7 +312,22 @@ rewrite_binary() {
       ;;
   esac
 
-  /usr/bin/codesign --force --sign - "${binary}" >/dev/null
+  /usr/bin/codesign \
+    --force \
+    --sign "${signing_identity}" \
+    --timestamp=none \
+    "${binary}" >/dev/null
+  /usr/bin/codesign --verify --strict --verbose=2 "${binary}" >/dev/null
+
+  if [[ "${signing_identity}" != "-" ]]; then
+    signature_details="$(/usr/bin/codesign -dv --verbose=4 "${binary}" 2>&1)"
+    print -r -- "${signature_details}" |
+      /usr/bin/grep -F "Authority=${signing_authority}" >/dev/null ||
+      fail "unexpected signing authority on ${binary}"
+    print -r -- "${signature_details}" |
+      /usr/bin/grep -F "TeamIdentifier=${signing_team_id}" >/dev/null ||
+      fail "unexpected signing team on ${binary}"
+  fi
 }
 
 while IFS= read -r binary; do
@@ -262,6 +345,16 @@ fi
 /bin/chmod 0755 \
   "${runtime}/bin/canon-g3010-escl-bridge" \
   "${runtime}/bin/scanimage"
+
+if [[ "${signing_identity}" == "-" ]]; then
+  print -- "mode=ad-hoc" >"${runtime}/CODE_SIGNING"
+else
+  {
+    print -- "mode=apple-development"
+    print -- "team_id=${signing_team_id}"
+    print -- "certificate_sha1=${signing_identity}"
+  } >"${runtime}/CODE_SIGNING"
+fi
 
 info "Native runtime built at ${runtime}"
 /usr/bin/du -sh "${runtime}"

@@ -1,18 +1,25 @@
 #!/bin/zsh
 set -eu
 
-readonly BRIDGE_VERSION="1.4.0"
+readonly BRIDGE_VERSION="1.4.3"
 readonly LABEL="io.github.zeallaez.canon-g3010-scanner-bridge"
 readonly SERVICE_NAME="Canon G3010 series"
 readonly SERVICE_TYPE="_uscan._tcp"
 readonly PROXY_HOST="canon-g3010-bridge.local."
-readonly SERVICE_PORT="8090"
+readonly SERVICE_PORT="${CANON_G3010_SERVICE_PORT:-8090}"
 readonly FALLBACK_UUID="7f2e31cb-c289-5757-b366-dde86d548b49"
 readonly DEFAULT_QUEUE="Canon_G3010"
 readonly DEFAULT_PRINTER_SERVICE="Canon G3010 series"
 readonly LEGACY_CONTAINER="canon-g3010-airscan-bridge"
 readonly LOG_MAX_BYTES="1048576"
 readonly LOG_KEEP="3"
+readonly PRESENCE_FAILURE_LIMIT="3"
+readonly PRESENCE_CHECK_INTERVAL="15"
+readonly REDISCOVERY_INTERVAL="10"
+readonly PRESENCE_PRIMARY_PORT="${CANON_G3010_PRESENCE_PRIMARY_PORT:-80}"
+readonly PRESENCE_SECONDARY_PORT="${CANON_G3010_PRESENCE_SECONDARY_PORT:-515}"
+readonly PRESENCE_CONNECT_TIMEOUT="${CANON_G3010_PRESENCE_TIMEOUT:-2}"
+readonly IMAGE_CAPTURE_REFRESH_DELAY="${CANON_G3010_IMAGE_CAPTURE_REFRESH_DELAY:-1}"
 
 script_path="${0:A}"
 script_dir="${script_path:h}"
@@ -117,6 +124,25 @@ probe_wsd() {
     --connect-timeout 2 --max-time 4 \
     --output /dev/null \
     "http://${address}:80/wsd/scanservice.cgi"
+}
+
+probe_printer_presence() {
+  local address="$1"
+  validate_ipv4 "${address}" || return 1
+
+  # The WSD endpoint can stop answering while the scanner carriage is moving.
+  # A TCP connection to either the web interface or LPD port is a less
+  # intrusive availability signal and does not start a print or scan job.
+  /usr/bin/nc -G "${PRESENCE_CONNECT_TIMEOUT}" -z \
+    "${address}" "${PRESENCE_PRIMARY_PORT}" >/dev/null 2>&1 ||
+    /usr/bin/nc -G "${PRESENCE_CONNECT_TIMEOUT}" -z \
+      "${address}" "${PRESENCE_SECONDARY_PORT}" >/dev/null 2>&1
+}
+
+bridge_has_active_job() {
+  /usr/bin/curl --fail --silent --max-time 2 \
+    "http://127.0.0.1:${SERVICE_PORT}/eSCL/ScannerStatus" 2>/dev/null |
+    /usr/bin/grep -q '<pwg:JobState>Processing</pwg:JobState>'
 }
 
 discover_queue_host() {
@@ -260,26 +286,29 @@ resolve_current_ip() {
 resolve_monitored_ip() {
   local resolved=""
 
-  # A scanner can legitimately stop answering WSD status probes while its
-  # carriage is moving. Address monitoring must therefore use Bonjour name
-  # resolution only; probing WSD here can misclassify "busy" as "offline" and
-  # restart the bridge in the middle of an Image Capture job.
+  # Do not use WSD as the background presence signal: the scanner can
+  # legitimately stop answering WSD while its carriage is moving. A generic
+  # TCP connection confirms that the device is still on the LAN without
+  # interfering with the current scan.
   if [[ -n "${printer_host}" ]]; then
     resolved="$(resolve_ipv4 "${printer_host}")"
-    if validate_ipv4 "${resolved}"; then
+    if validate_ipv4 "${resolved}" &&
+       probe_printer_presence "${resolved}"; then
       print -r -- "${resolved}"
       return 0
     fi
   fi
 
-  printer_ip=""
-  if discover_dnssd_record; then
-    print -r -- "${printer_ip}"
+  if validate_ipv4 "${preferred_ip}" &&
+     probe_printer_presence "${preferred_ip}"; then
+    print -r -- "${preferred_ip}"
     return 0
   fi
 
-  if validate_ipv4 "${preferred_ip}"; then
-    print -r -- "${preferred_ip}"
+  printer_ip=""
+  if discover_dnssd_record &&
+     probe_printer_presence "${printer_ip}"; then
+    print -r -- "${printer_ip}"
     return 0
   fi
   return 1
@@ -309,6 +338,31 @@ check_runtime() {
     fail "native scanimage runtime is missing: ${runtime}/bin/scanimage"
   [[ -f "${runtime}/lib/sane/libsane-airscan.1.so" ]] ||
     fail "native WSD backend is missing: ${runtime}/lib/sane/libsane-airscan.1.so"
+}
+
+runtime_signing_summary() {
+  local runtime="$1"
+  local binary="${runtime}/bin/canon-g3010-escl-bridge"
+  local details team_id
+
+  [[ -x "${binary}" ]] || {
+    print -- "unavailable"
+    return
+  }
+  details="$(/usr/bin/codesign -dv --verbose=4 "${binary}" 2>&1 || true)"
+  team_id="$(
+    print -r -- "${details}" |
+      /usr/bin/sed -nE 's/^TeamIdentifier=(.+)$/\1/p' |
+      /usr/bin/head -n 1
+  )"
+  if print -r -- "${details}" |
+    /usr/bin/grep -q '^Authority=Apple Development:'; then
+    print -- "Apple Development (${team_id:-unknown team})"
+  elif print -r -- "${details}" | /usr/bin/grep -q '^Signature=adhoc$'; then
+    print -- "ad hoc"
+  else
+    print -- "unsigned or unrecognized"
+  fi
 }
 
 write_runtime_config() {
@@ -539,6 +593,28 @@ publish_scanner() {
   bonjour_pid=$!
 }
 
+refresh_image_capture_cache() {
+  local icdd_pid=""
+
+  [[ "${CANON_G3010_SKIP_IMAGE_CAPTURE_REFRESH:-no}" != "yes" ]] || return 0
+
+  # Image Capture's per-user discovery daemon can retain a failed AirScan
+  # session after the printer is powered off and the Bonjour service is
+  # withdrawn. Once the service has been republished, restart only that
+  # user-owned cache process. launchd immediately recreates it and an open
+  # Image Capture window reconnects without requiring a logout or reboot.
+  icdd_pid="$(
+    /usr/bin/pgrep -x -u "$(/usr/bin/id -u)" icdd 2>/dev/null |
+      /usr/bin/head -n 1
+  )"
+  [[ -n "${icdd_pid}" ]] || return 0
+
+  /bin/sleep "${IMAGE_CAPTURE_REFRESH_DELAY}"
+  if /bin/kill -TERM "${icdd_pid}" 2>/dev/null; then
+    info "Refreshed macOS Image Capture scanner cache"
+  fi
+}
+
 run_session() {
   local runtime="$1"
   local candidate failures=0
@@ -554,11 +630,20 @@ run_session() {
 
   info "Publishing ${SERVICE_NAME} with UUID ${printer_uuid}"
   publish_scanner
+  refresh_image_capture_cache
 
   while [[ "${shutting_down}" == "no" ]]; do
-    /bin/sleep 15
+    /bin/sleep "${PRESENCE_CHECK_INTERVAL}"
     /bin/kill -0 "${engine_pid}" 2>/dev/null || return 1
     /bin/kill -0 "${bonjour_pid}" 2>/dev/null || return 1
+
+    # Never interrupt a real scan merely because the printer is temporarily
+    # too busy to accept an unrelated network connection. Once the job
+    # finishes, normal presence monitoring resumes.
+    if bridge_has_active_job; then
+      failures=0
+      continue
+    fi
 
     candidate="$(resolve_monitored_ip 2>/dev/null || true)"
     if validate_ipv4 "${candidate}"; then
@@ -572,8 +657,9 @@ run_session() {
       fi
     else
       (( failures += 1 ))
-      if (( failures >= 3 )); then
-        info "Printer is unavailable; rediscovering"
+      info "Printer presence check failed (${failures}/${PRESENCE_FAILURE_LIMIT})"
+      if (( failures >= PRESENCE_FAILURE_LIMIT )); then
+        info "Printer is offline; withdrawing the stale scanner service"
         return 3
       fi
     fi
@@ -594,8 +680,8 @@ run_supervisor() {
   while [[ "${shutting_down}" == "no" ]]; do
     candidate="$(resolve_current_ip 2>/dev/null || true)"
     if ! validate_ipv4 "${candidate}"; then
-      info "Printer not found; retrying discovery in 10 seconds"
-      /bin/sleep 10
+      info "Printer not found; scanner service remains withdrawn"
+      /bin/sleep "${REDISCOVERY_INTERVAL}"
       continue
     fi
     printer_ip="${candidate}"
@@ -647,10 +733,13 @@ write_launch_agent() {
 
 install_bridge() {
   local runtime
-  if [[ -x "${system_runtime}/bin/canon-g3010-escl-bridge" ]]; then
-    runtime="${system_runtime}"
-  elif [[ -x "${source_runtime}/bin/canon-g3010-escl-bridge" ]]; then
+  # A source-tree invocation must prefer the runtime that was just built and
+  # signed there. Installed package invocations do not have source_runtime and
+  # therefore continue to use the packaged system runtime.
+  if [[ -x "${source_runtime}/bin/canon-g3010-escl-bridge" ]]; then
     runtime="${source_runtime}"
+  elif [[ -x "${system_runtime}/bin/canon-g3010-escl-bridge" ]]; then
+    runtime="${system_runtime}"
   elif [[ -x "${installed_runtime}/bin/canon-g3010-escl-bridge" ]]; then
     runtime="${installed_runtime}"
   else
@@ -699,6 +788,7 @@ install_bridge() {
 
   info "Multifunction identity: ${printer_uuid}"
   info "Automatic IP reconnection: enabled"
+  info "Automatic offline recovery: enabled"
   info "Direct WSD-to-eSCL bridge installed; Docker is not used"
 }
 
@@ -750,7 +840,9 @@ status_bridge() {
   print -- "Bonjour hostname: ${printer_host:-unavailable}"
   print -- "Current printer IP: ${current_ip:-unavailable}"
   print -- "Automatic IP reconnection: enabled"
+  print -- "Automatic offline recovery: enabled"
   print -- "Runtime: native macOS (no Docker)"
+  print -- "Code signing: $(runtime_signing_summary "${runtime}")"
   print -- "LaunchAgent: ${launch_status}"
   print -- "eSCL endpoint: ${endpoint_status}"
   print -- "Endpoint: http://127.0.0.1:${SERVICE_PORT}/eSCL"
@@ -829,6 +921,16 @@ doctor_bridge() {
     (( problems += 1 ))
   fi
 
+  if [[ -x "${runtime}/bin/canon-g3010-escl-bridge" ]] &&
+     /usr/bin/codesign --verify --strict \
+       "${runtime}/bin/canon-g3010-escl-bridge" >/dev/null 2>&1 &&
+     [[ "$(runtime_signing_summary "${runtime}")" == "Apple Development ("* ]]; then
+    print -- "[OK] Stable Apple Development code signing: $(runtime_signing_summary "${runtime}")"
+  else
+    print -- "[WARN] Native bridge is not signed with a stable Apple Development identity"
+    (( problems += 1 ))
+  fi
+
   if /bin/launchctl print "gui/$(/usr/bin/id -u)/${LABEL}" \
     >/dev/null 2>&1; then
     print -- "[OK] LaunchAgent is running"
@@ -895,6 +997,10 @@ uninstall_bridge() {
     "${support_dir}/config"
   info "Native scanner bridge removed"
 }
+
+if [[ "${CANON_G3010_BRIDGE_LIBRARY_ONLY:-no}" == "yes" ]]; then
+  return 0
+fi
 
 if [[ "${action}" == "-h" || "${action}" == "--help" ]]; then
   usage
