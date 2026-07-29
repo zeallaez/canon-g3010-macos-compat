@@ -148,6 +148,11 @@ The scan service reuses the physical printer's `_printer._tcp` UUID, giving
 print and scan the same multifunction identity. The per-user launch agent keeps
 the service alive, periodically resolves the stable `*.local.` hostname, and
 restarts the bridge with updated WSD configuration after a DHCP address change.
+It also checks the printer's ordinary TCP presence without querying the busy
+WSD endpoint. After three failures it withdraws the stale `_uscan` service;
+when the printer returns, the supervisor rediscovers the address and republishes
+the scanner automatically. Presence failures are ignored while an eSCL job is
+actively processing so a long scan is never interrupted.
 
 ## 8. Defaults
 

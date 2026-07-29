@@ -29,7 +29,8 @@ verified on a Canon G3810 sold as part of the G3010 series.
 - Creates a system printer named `Canon_G3010`.
 - Automatically discovers the default `Canon G3010 series` service.
 - Reuses the printer's real Bonjour UUID and product name for print and scan.
-- Automatically reconnects through the stable hostname after a DHCP change.
+- Automatically withdraws a stale scan service while the printer is offline,
+  then rediscovers and republishes it after Wi-Fi or DHCP recovery.
 - Supports an explicit hostname when automatic discovery is unavailable.
 - Configures A4, color, plain paper, normal quality, and one-sided printing.
 - Can send a macOS test page.
@@ -74,7 +75,7 @@ The installer verifies that this file exists before changing the print queue:
 ### Install from a release package
 
 1. Install Canon's official G3000 CUPS driver.
-2. Download `Canon-G3010-macOS-Compat-1.4.0.pkg` from GitHub Releases.
+2. Download `Canon-G3010-macOS-Compat-1.4.1.pkg` from GitHub Releases.
 3. Open the package and follow the macOS installer.
 4. Print to `Canon G3010 series (Mac compatibility)`.
 
@@ -83,7 +84,7 @@ Terminal method instead of disabling Gatekeeper:
 
 ```sh
 sudo installer \
-  -pkg Canon-G3010-macOS-Compat-1.4.0.pkg \
+  -pkg Canon-G3010-macOS-Compat-1.4.1.pkg \
   -target /
 ```
 

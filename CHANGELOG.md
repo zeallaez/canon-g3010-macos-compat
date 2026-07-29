@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.1 - 2026-07-29
+
+- Added non-invasive TCP presence monitoring that does not depend on the WSD
+  endpoint being idle.
+- Withdraws the stale Bonjour scanner advertisement after three consecutive
+  offline checks and automatically republishes it when the printer returns.
+- Suppresses offline restarts while a real eSCL scan job is processing.
+- Added regression coverage for the presence-probe and active-job guards.
+
 ## 1.4.0 - 2026-07-24
 
 - Added an original lightweight eSCL server that invokes the native
