@@ -24,7 +24,7 @@ info() {
 
 resolve_signing_identity() {
   local configured="${CANON_G3010_CODESIGN_IDENTITY:-}"
-  local record
+  local candidate_output record
   typeset -a candidates
 
   if [[ -z "${configured}" && -s "${signing_config}" ]]; then
@@ -43,10 +43,14 @@ resolve_signing_identity() {
     return
   fi
 
-  candidates=("${(@f)$(
+  candidate_output="$(
     /usr/bin/security find-identity -v -p codesigning |
       /usr/bin/awk '/"Apple Development:/ { print $2 }'
-  )}")
+  )"
+  candidates=()
+  if [[ -n "${candidate_output}" ]]; then
+    candidates=("${(@f)candidate_output}")
+  fi
   if (( ${#candidates[@]} == 1 )); then
     print -r -- "${candidates[1]}"
     return

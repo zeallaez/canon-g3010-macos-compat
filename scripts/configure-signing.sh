@@ -72,11 +72,15 @@ if [[ "${action}" == "status" ]]; then
 fi
 
 if [[ -z "${requested_identity}" ]]; then
-  typeset -a candidates
-  candidates=("${(@f)$(
+  candidate_output="$(
     /usr/bin/security find-identity -v -p codesigning |
       /usr/bin/awk '/"Apple Development:/ { print $2 }'
-  )}")
+  )"
+  typeset -a candidates
+  candidates=()
+  if [[ -n "${candidate_output}" ]]; then
+    candidates=("${(@f)candidate_output}")
+  fi
   if (( ${#candidates[@]} == 0 )); then
     fail "no Apple Development code-signing identity was found"
   elif (( ${#candidates[@]} > 1 )); then
